@@ -105,6 +105,8 @@ You can add taxonomic classification and sequence identity cluster information t
 
 You **must** use the unique sequences file from the *tabulate* step as the basis for this information. The labels in this file will match up with the labels used in the time-series database, allowing the information to be properly merged. The unique sequence file has size information contained in the FASTA header to enable it to work with clustering software like USEARCH/UPARSE. This must be removed from the resulting taxonomy and OTU cluster files by using sed: `sed -i 's/;size=[0-9]*;//g' taxonomy.txt`
 
+A more thorough example of how to do this is given [in the wiki](https://github.com/beiko-lab/timeclust/wiki/Generating-OTUs-and-taxonomy-for-import-into-timeclust).
+
 *timeclust add taxonomy -i hdf5_input -d taxonomy_data*
 *timeclust add sequence_clusters -i hdf5_input -d sequence_cluster_data*:
 - -**i**: input HDF5 database file location
