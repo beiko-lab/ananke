@@ -16,7 +16,7 @@ setup(name='timeclust',
 	'Topic :: Scientific/Engineering :: Bio-Informatics'],
         license='GPL3',
 	packages=['timeclust'],
-	install_requires=[''],
+	install_requires=['h5py>=2.3.1','numpy>=1.6','scipy>=0.16.1','scikit-learn>=0.16','pandas>=0.17'],
 	entry_points = {
         'console_scripts': ['timeclust=timeclust.timeclust:main'],
     },
