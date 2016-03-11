@@ -107,7 +107,7 @@ timeclust cluster -i timeclust_db_filtered.h5 -n 8 -l 0.1 -u 100 -s 0.1
 
 You can add taxonomic classification and sequence identity cluster information to the time-series database file, and these will appear in the [timeclust-ui](https://github.com/beiko-lab/timeclust-ui) interface for contrasting with the time-series clusters.
 
-You **must** use the unique sequences file from the *tabulate* step as the basis for this information. The labels in this file will match up with the labels used in the time-series database, allowing the information to be properly merged. The unique sequence file has size information contained in the FASTA header to enable it to work with clustering software like USEARCH/UPARSE. This must be removed from the resulting taxonomy and OTU cluster files by using sed: `sed -i 's/;size=[0-9]*;//g' taxonomy.txt`
+You can use the unique sequences file from the *tabulate* step as the basis for this information. The labels in this file will match up with the labels used in the time-series database, allowing the information to be properly merged. The unique sequence file has size information contained in the FASTA header to enable it to work with clustering software like USEARCH/UPARSE. This must be removed from the resulting taxonomy and OTU cluster files by using sed: `sed -i 's/;size=[0-9]*;//g' taxonomy.txt`
 
 A more thorough example of how to do this is given [in the wiki](https://github.com/beiko-lab/timeclust/wiki/Generating-OTUs-and-taxonomy-for-import-into-timeclust).
 
@@ -120,4 +120,16 @@ Examples:
 ```
 timeclust add taxonomy -i timeclust_db_filtered.h5 -d seq.unique_tax_assignments.txt
 timeclust add sequence_clusters -i timeclust_db_filtered.h5 -d seq_otus.txt
+```
+
+If you already have an OTU clustering scheme you would like to use, it must be translated so that the labels are consistent. For this, you require the sequence FASTA file that you used as input to your clustering pipeline, and the resulting OTU cluster file (in QIIME's tab-separated format, see Output section here: http://qiime.org/scripts/pick_otus.html). The output of this script can be used as the input to `timeclust add sequence_clusters`.
+
+*timeclust translate_clusters -i fasta_input -c clusters_input -o clusters_output*
+- -**i**: input FASTA file used to generate your clusters
+- -**c**: input clustering scheme in tab-separated format (same format as QIIME outputs)
+- -**o**: desired output cluster file name
+
+Example:
+```
+timeclust translate_clusters -i seq.fasta -c seq_otus.txt -o seq_otus_translated.txt
 ```
