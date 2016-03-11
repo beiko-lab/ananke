@@ -9,6 +9,7 @@ from timeclust_cluster import run_cluster
 from timeclust_database import TimeSeriesData
 from timeclust_simulate import create_simulation_data, score_simulation
 from timeclust_stats import print_database_info
+from timeclust_misc import translate_otus
 
 def main():
     #  Argument parsing
@@ -53,6 +54,12 @@ def main():
     simulation_parser.add_argument("-r", metavar="nreps", help="Number of repetitions for each seed", required=True, type=int)
     score_parser = subparsers.add_parser("score_simulation")
     score_parser.add_argument("-d", metavar="database", help="HDF5 database filename (will be created)", required=True, type=str)
+
+    #  Add misc utilities
+    clusters_parser = subparsers.add_parser("translate_clusters")
+    clusters_parser.add_argument("-i", metavar="input", help="Input FASTA sequence file", required=True, type=str)
+    clusters_parser.add_argument("-c", metavar="clusters", help="Input cluster file (seq_otus.txt)", required=True, type=str)
+    clusters_parser.add_argument("-o", metavar="output", help="Output cluster file", required=True, type=str)
     args = parser.parse_args()
     
     #Route to the proper routines
@@ -77,6 +84,8 @@ def main():
     elif args.subparser_name == "info":
         timeseriesdb = TimeSeriesData(args.i)
         print_database_info(timeseriesdb)
+    elif args.subparser_name == "translate_clusters":
+        translate_otus(args.i, args.c, args.o) 
 
 if __name__ == "__main__":
     main()
