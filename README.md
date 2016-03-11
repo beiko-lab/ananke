@@ -7,7 +7,7 @@ The following Python packages are required:
 - numpy >= 1.6
 - scipy >= 0.16.1
 - scikit-learn >= 0.16
-- pandas>=0.17
+- pandas >= 0.17
 
 To install *timeclust*, download the [source code](https://github.com/beiko-lab/timeclust/archive/master.zip), and in the extracted directory run:
 ```
@@ -17,7 +17,7 @@ This can be run as root if you want to install *timeclust* globally.
 
 ## Running timeclust
 ### Required input data
-*timeclust* requires a pretty minimal set of input data. It requires a FASTA sequence file and a metadata mapping file. The sequence file contains all sequences (pre-filtered for quality, if desired) with the sample ID in the FASTA header, followed by a sequence count. For example:
+*timeclust* requires a pretty minimal set of input data. It requires a FASTA sequence file and a metadata mapping file. The sequence file contains all sequences (pre-filtered for quality, if desired) with the sample ID in the FASTA header, followed by a sequence count. Sequences must be on a single line. For example:
 ```
 >Sample1_0
 ATGCGCATGCTATGCAT
@@ -26,6 +26,10 @@ ATCGAGCATCGATCGAC
 >Sample2_0
 AGCGATCGATCGATCGAT
 ...
+```
+If your FASTA file has sequences split into multiple lines, the clever guys who made [SWARM](https://github.com/torognes/swarm#linearization) have a little awk script to convert it to the required format:
+```
+awk 'NR==1 {print ; next} {printf /^>/ ? "\n"$0"\n" : $1} END {printf "\n"}' amplicons.fasta > amplicons_linearized.fasta
 ```
 
 The metadata file is a tab-separated sheet with the first column label as "#SampleID" and one of the metadata columns must contain the time offset. The metadata file from a QIIME analysis is compatible:
