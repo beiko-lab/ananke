@@ -133,7 +133,6 @@ class TimeSeriesData(object):
             self.h5_table[target][chunks[i]:chunks[i+1]] = array[chunks[i]:chunks[i+1]]
             
     def get_sparse_matrix(self, chunk_size=1000):
-        print("intializing empty arrays")
         data = np.empty(self.h5_table["timeseries/data"].shape)
         indices = np.empty(self.h5_table["timeseries/indices"].shape)
         indptr = np.empty(self.h5_table["timeseries/indptr"].shape)
@@ -143,14 +142,12 @@ class TimeSeriesData(object):
             chunks = chunks + [data.shape[0]]
         for i,j in zip(chunks[0:-1], chunks[1:]):
             self.h5_table["timeseries/data"].read_direct(data,np.s_[i:j],np.s_[i:j])
-        print("Data array read!")
         
         chunks = range(0, indices.shape[0], chunk_size)
         if chunks[-1] != indices.shape[0]:
             chunks = chunks + [indices.shape[0]]
         for i,j in zip(chunks[0:-1], chunks[1:]):
             self.h5_table["timeseries/indices"].read_direct(indices,np.s_[i:j],np.s_[i:j])
-        print("indices read!")
         
         chunks = range(0, indptr.shape[0], chunk_size)
         if chunks[-1] != indptr.shape[0]:
