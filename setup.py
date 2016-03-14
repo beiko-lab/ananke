@@ -1,8 +1,9 @@
 #Taken from https://wiki.python.org/moin/Distutils/Tutorial
 from setuptools import setup
+import timeclust
 
 setup(name='timeclust',
-	version='0.1.0',
+	version=timeclust.__version__,
 	description='timeclust: Clustering of time-series marker gene data',
 	url='https://github.com/beiko-lab/timeclust',
 	author='Michael Hall',

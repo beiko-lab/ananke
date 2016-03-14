@@ -44,7 +44,7 @@ def generate_STS_distance_matrix(slope_matrix, nthreads=4):
     p = multiprocessing.Pool(nthreads)
     partial_sts_matrix_generator = partial(sts_matrix_generator, slope_matrix = slope_matrix)
     print("Beginning parallel calculations on %d threads"%nthreads)
-    count = 0
+    count = 1
     for result in p.imap_unordered(partial_sts_matrix_generator, range(0, nrows-1), 1000):
         ind = result[0]
         dists = result[1]

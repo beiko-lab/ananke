@@ -2,6 +2,12 @@ import h5py as h5
 import numpy as np
 from scipy.sparse import csr_matrix
 from os import getcwd
+from __init__ import __version__
+
+#  TODO: - Better check of what is populated when opening a file
+#        - Add a version number param to help with future-proofing
+#        - Self-check for consistency
+#        - Add a parameter for multi-time-series
 
 class TimeSeriesData(object):
     def __init__(self, h5_file):
@@ -14,6 +20,8 @@ class TimeSeriesData(object):
             h5_table["timeseries"].require_dataset("data", shape=(1,), dtype=np.dtype('int32'), maxshape=(None,))
             h5_table["timeseries"].require_dataset("indices", shape=(1,), dtype=np.dtype('int32'), maxshape=(None,))
             h5_table["timeseries"].require_dataset("indptr", shape=(1,), dtype=np.dtype('int32'), maxshape=(None,))
+            #Keeps track of which version created the file
+            h5_table.attrs.create("origin_version", __version__)
             self.filled_data = False
         else:
             #TODO: More sophisticated check of what's populated
@@ -32,11 +40,11 @@ class TimeSeriesData(object):
             h5_table["samples"].require_dataset("metadata", shape=(1,), dtype=h5.special_dtype(vlen=bytes), maxshape=(None,), exact=False)
         self.h5_table = h5_table
         #These indices help us populate the timeseries sparse matrix
-        self.ts_data_index = 0
-        self.ts_indptr_index = 0
+        self._ts_data_index = 0
+        self._ts_indptr_index = 0
 
     def __del__(self):
-        print("Closing file")
+		#Close the file connection
         self.h5_table.close()
 
     def resize_data(self, ngenes=None, nsamples=None, nobs=None):
@@ -77,16 +85,16 @@ class TimeSeriesData(object):
 
     def add_timeseries_data(self, data, indices, indptr, sequences):
         if not self.filled_data:
-            self.ts_data_index = 0
-            self.ts_indptr_index = 0
+            self._ts_data_index = 0
+            self._ts_indptr_index = 0
             self.filled_data = True
             self.h5_table["timeseries/indptr"][-1] = self.h5_table["timeseries/data"].shape[0]
-        self.h5_table["timeseries/data"][self.ts_data_index:self.ts_data_index+len(data)] = data
-        self.h5_table["timeseries/indices"][self.ts_data_index:self.ts_data_index+len(indices)] = indices
-        self.h5_table["timeseries/indptr"][self.ts_indptr_index:self.ts_indptr_index+len(indptr)] = indptr
-        self.h5_table["genes/sequenceids"][self.ts_indptr_index:self.ts_indptr_index+len(sequences)] = sequences
-        self.ts_data_index += len(data)
-        self.ts_indptr_index += len(indptr)
+        self.h5_table["timeseries/data"][self._ts_data_index:self._ts_data_index+len(data)] = data
+        self.h5_table["timeseries/indices"][self._ts_data_index:self._ts_data_index+len(indices)] = indices
+        self.h5_table["timeseries/indptr"][self._ts_indptr_index:self._ts_indptr_index+len(indptr)] = indptr
+        self.h5_table["genes/sequenceids"][self._ts_indptr_index:self._ts_indptr_index+len(sequences)] = sequences
+        self._ts_data_index += len(data)
+        self._ts_indptr_index += len(indptr)
 
     def add_taxonomy_data(self, input_filename):
         #Input: tab-separated file, first column is sequence hash (ie, unique sequence identifier
@@ -102,7 +110,6 @@ class TimeSeriesData(object):
                 tax_list[i] = sequence_to_tax[sequence_id]
             except KeyError:
                 tax_list[i] = "NF"
-        print tax_list[0:10]
         self.insert_array_by_chunks('genes/taxonomy', tax_list)
             
 
@@ -135,27 +142,22 @@ class TimeSeriesData(object):
     def get_sparse_matrix(self, chunk_size=1000):
         data = np.empty(self.h5_table["timeseries/data"].shape)
         indices = np.empty(self.h5_table["timeseries/indices"].shape)
-        indptr = np.empty(self.h5_table["timeseries/indptr"].shape)
-        
+        indptr = np.empty(self.h5_table["timeseries/indptr"].shape)       
         chunks = range(0, data.shape[0], chunk_size)
         if chunks[-1] != data.shape[0]:
             chunks = chunks + [data.shape[0]]
         for i,j in zip(chunks[0:-1], chunks[1:]):
-            self.h5_table["timeseries/data"].read_direct(data,np.s_[i:j],np.s_[i:j])
-        
+            self.h5_table["timeseries/data"].read_direct(data,np.s_[i:j],np.s_[i:j])       
         chunks = range(0, indices.shape[0], chunk_size)
         if chunks[-1] != indices.shape[0]:
             chunks = chunks + [indices.shape[0]]
         for i,j in zip(chunks[0:-1], chunks[1:]):
-            self.h5_table["timeseries/indices"].read_direct(indices,np.s_[i:j],np.s_[i:j])
-        
+            self.h5_table["timeseries/indices"].read_direct(indices,np.s_[i:j],np.s_[i:j])       
         chunks = range(0, indptr.shape[0], chunk_size)
         if chunks[-1] != indptr.shape[0]:
             chunks = chunks + [indptr.shape[0]]
         for i,j in zip(chunks[0:-1], chunks[1:]):
             self.h5_table["timeseries/indptr"].read_direct(indptr,np.s_[i:j],np.s_[i:j])
-        
-        print("arrays loaded from HDF5 file")
         return csr_matrix((data, indices, indptr))
         
     def get_time_points(self):
