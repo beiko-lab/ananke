@@ -23,6 +23,9 @@ def main():
     tabulate_parser.add_argument("-o", metavar="output", help="Output HDF5 data file", required=True, type=str)
     tabulate_parser.add_argument("-f", metavar="fasta", help="Output FASTA file", required=True, type=str)
     tabulate_parser.add_argument("-t", metavar="time_label", help="Column name for time points in metadata file", default="time_points", type=str)
+    tabulate_parser.add_argument("--multi", help="Indicates the input data contains multiple time-series, requires column name of time-series mask variable", type=str, required=False)
+    tabulate_parser.add_argument("--size_labels", help="Toggle if the number of occurrences of each sequence is in the FASTA label (in the format: '>SampleXYZ_50;size=100')", action="store_true")
+
     
     #  Filter script options
     filter_parser = subparsers.add_parser("filter")
@@ -64,7 +67,7 @@ def main():
     
     #Route to the proper routines
     if args.subparser_name == "tabulate":
-        aggregate(args.i, args.m, args.t, args.o, args.f)
+        aggregate(args.i, args.m, args.t, args.o, args.f, args.multi)
     elif args.subparser_name == "filter":
         timeseriesdb = TimeSeriesData(args.i)
         timeseriesdb.filter_data(args.o, float(args.t), args.f)

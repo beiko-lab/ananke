@@ -20,20 +20,20 @@ from timeclust_database import TimeSeriesData
 #  - Cluster label file with clustering parameter as column names, hash as row names, temporal cluster number as entries
 #  - Distance matrix (for fast reclustering)
 
-#  STS distance after you have slopes mx, mv 
-def sts_distance(mx, mv):
-    diff = mv-mx
-    diff.data = diff.data**2
-    sts_squared = diff.sum()
-    return sqrt(sts_squared)
-    
+
 #  Calculate the slopes, mx
-def calculate_slopes(matrix, time_points):
+def calculate_slopes(matrix, time_points, mask):
     time_points = np.array(time_points)
+    border = []
+    for i in range(len(mask)-1):
+        border.append(mask[i] == mask[i+1])
+    border = np.array(border)
     time_difference = time_points[1:] - time_points[0:len(time_points)-1]
+    time_difference = time_difference[border]
     if (min(time_difference) <= 0):
         raise ValueError, "Minimum time difference is less than or equal to zero (may be caused by two consecutive samples with identical time points)"
     slope_matrix = matrix[:, 1:]-matrix[:, 0:matrix.shape[1]-1]
+    slope_matrix = slope_matrix[:,border]
     slope_matrix = slope_matrix / time_difference
     return slope_matrix
 
@@ -75,12 +75,6 @@ def cluster_dbscan(dist_matrix, eps=1):
     cluster_labels = dbs.fit_predict(dist_matrix)
     return cluster_labels
 
-#  Affinity propagation from scikit learn (it isn't good for this problem)
-def cluster_affinitypropagation(dist_matrix, damping=0.5):
-    ap = AffinityPropagation(damping=damping, affinity='precomputed')
-    cluster_labels = ap.fit_predict(dist_matrix)
-    return cluster_labels
-
 #  Main method
 def run_cluster(timeseriesdata_path, num_cores, param_min=0.01, param_max=1000, param_step=0.01):
     print("Loading time-series database file")
@@ -88,6 +82,7 @@ def run_cluster(timeseriesdata_path, num_cores, param_min=0.01, param_max=1000, 
     print("Importing time-series matrix")
     matrix = timeseriesdb.get_sparse_matrix()
     time_points = timeseriesdb.get_time_points()
+    mask = timeseriesdb.get_mask()
     matrix = matrix.todense()
     if matrix.shape[0] > 1:
         #Normalize the matrix for sequence depth then into Z-scores
@@ -99,7 +94,7 @@ def run_cluster(timeseriesdata_path, num_cores, param_min=0.01, param_max=1000, 
         #Standardize to Z-scores
         norm_matrix = np.apply_along_axis(lambda x: (x-np.mean(x))/np.std(x),1,matrix)
         print("Calculating slopes")
-        slope_matrix = calculate_slopes(norm_matrix, time_points)
+        slope_matrix = calculate_slopes(norm_matrix, time_points, mask)
         print("Generating STS distance matrix")
         sts_dist_matrix = generate_STS_distance_matrix(slope_matrix, num_cores)
         del slope_matrix

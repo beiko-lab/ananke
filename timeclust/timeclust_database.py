@@ -38,6 +38,7 @@ class TimeSeriesData(object):
             h5_table["samples"].require_dataset("names", shape=(1,), dtype=h5.special_dtype(vlen=bytes), maxshape=(None,), exact=False)
             h5_table["samples"].require_dataset("time", shape=(1,), dtype=np.dtype('int32'), maxshape=(None,), exact=False)
             h5_table["samples"].require_dataset("metadata", shape=(1,), dtype=h5.special_dtype(vlen=bytes), maxshape=(None,), exact=False)
+            h5_table["samples"].require_dataset("mask", shape=(1,), dtype=h5.special_dtype(vlen=bytes), maxshape=(None,), exact=False)
         self.h5_table = h5_table
         #These indices help us populate the timeseries sparse matrix
         self._ts_data_index = 0
@@ -47,6 +48,19 @@ class TimeSeriesData(object):
 		#Close the file connection
         self.h5_table.close()
 
+    def version_greater_than(self, version):
+		major, minor, release = self.h5_table.attrs["origin_version"].split(".")
+		comp_major, comp_minor, comp_release = version.split(".")
+		if int(major) > int(comp_major):
+			return True
+		elif int(major) == int(comp_major):
+			if int(minor) > int(comp_minor):
+				return True
+			elif int(minor) == int(comp_minor):
+				if int(release) > int(comp_release):
+					return True
+		return False
+        
     def resize_data(self, ngenes=None, nsamples=None, nobs=None):
         #If any of the parameters are not set, try to infer them
         if (ngenes == None):
@@ -67,6 +81,7 @@ class TimeSeriesData(object):
         self.h5_table["samples/names"].resize((nsamples,))
         self.h5_table["samples/time"].resize((nsamples,))
         self.h5_table["samples/metadata"].resize((nsamples,))
+        self.h5_table["samples/mask"].resize((nsamples,))
         #Fill some arrays with ghost values so rhdf5 doesn't segfault
         self.fill_array("genes/taxonomy","None")
         self.fill_array("genes/sequenceclusters","None")
@@ -79,6 +94,9 @@ class TimeSeriesData(object):
 
     def add_names(self, names_list):
         self.h5_table["samples/names"][:] = names_list
+        
+    def add_mask(self, mask_list):
+		self.h5_table["samples/mask"][:] = mask_list
 
     def add_timepoints(self, timepoints_list):
         self.h5_table["samples/time"][:] = timepoints_list
@@ -162,6 +180,13 @@ class TimeSeriesData(object):
         
     def get_time_points(self):
         return self.h5_table["samples/time"]
+        
+    def get_mask(self):
+		if self.version_greater_than("0.1.0"):
+		    return self.h5_table["samples/mask"]
+		else:
+			#We didn't support multi time-series, so return a dummy mask
+			return [1]*len(self.h5_table["samples/names"])
 
     def get_cluster_labels(self, i):
         return self.h5_table["genes/clusters"][:,i]
@@ -213,7 +238,9 @@ class TimeSeriesData(object):
             sample_name_array = self.h5_table["samples/names"]
             new_timeseriesdb.add_names(sample_name_array)
             time_points = self.h5_table["samples/time"][:]
+            mask = self.h5_table["samples/mask"][:]
             new_timeseriesdb.add_timepoints(time_points)
+            new_timeseriesdb.add_mask(mask)
             #Put into HDF5 file by chunks because otherwise memory usage balloons
             new_timeseriesdb.insert_array_by_chunks("timeseries/data", filtered_data)
             new_timeseriesdb.insert_array_by_chunks("timeseries/indptr", filtered_indptr)

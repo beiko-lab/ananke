@@ -7,16 +7,27 @@ from timeclust_database import TimeSeriesData
 import warnings
 
 #  TODO: - Add an observer to the timeseriesdb class for progress
+#        - Ensure that everything in the metadata list actually exists
 
 def aggregate(sequence_path, metadata_path, time_name, \
-              timeseriesdata_path, outseq_path, single_ts = True):
+              timeseriesdata_path, outseq_path, time_mask=None, \
+              size_labels = False):
     #Read in metadata file
     mm = pd.read_csv(metadata_path, sep="\t", header=0)
     #Get the time points (assumption: can be coerced to integers)
     try:
         time_points = np.sort(mm[time_name].unique())
     except:
-        raise KeyError, "KeyError: Specified time point name is not found in metadata file"
+        raise KeyError, "Specified time point column name is not found in metadata file"
+    if time_mask is not None:
+        if time_mask not in mm:
+            raise KeyError, "Specified time mask column name is not found in metadata file"
+        else:
+            #Get the values sorted by mask first, then time points
+            mm = mm.sort_values(by=[time_mask,time_name])
+    else:
+        mm = mm.sort_values(by=time_name)
+        
     #Now open the sequence file
     #Input format assumptions: - sequences and headers take 1 line each, no blank lines
     seqf = open(sequence_path,'r')
@@ -49,7 +60,11 @@ def aggregate(sequence_path, metadata_path, time_name, \
         sequence = seqf.next().strip()
         assert sequence[0] != ">", "Expected sequence, got label. Is \
           your FASTA file one-line-per-sequence?"
-        seqcount[sequence][sample_name] += 1
+        if size_labels:
+            size = line.strip().split(";")[-1].split("=")[-1]
+            seqcount[sequence][sample_name] += int(size) 
+        else:
+            seqcount[sequence][sample_name] += 1
         i+=1
         #This needs to be replaced by something better
         if (i%10000 == 0):
@@ -67,6 +82,11 @@ def aggregate(sequence_path, metadata_path, time_name, \
     timeseriesdb.resize_data(ngenes, nsamples, nobs)
     timeseriesdb.add_names(sample_name_array)
     timeseriesdb.add_timepoints(mm[time_name])
+    if time_mask is not None:
+        timeseriesdb.add_mask(mm[time_mask])
+    else:
+        #Set a dummy mask
+        timeseriesdb.add_mask([1]*len(sample_name_array))
     data = []
     indptr = []
     indices = []
@@ -107,4 +127,4 @@ def aggregate(sequence_path, metadata_path, time_name, \
         warnings.warn("Number of time-points retrieved from sequence " \
           "file is less than the number of samples in metadata file. " \
           "%d samples are missing. This is probably not what you want."\
-          % (nsamples - len(unique_col),))
+          % (nsamples - len(unique_indices),))
