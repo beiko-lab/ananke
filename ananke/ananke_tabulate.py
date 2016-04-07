@@ -3,7 +3,7 @@
 import pandas as pd
 import numpy as np
 from collections import defaultdict
-from timeclust_database import TimeSeriesData
+from ananke_database import TimeSeriesData
 import warnings
 
 #  TODO: - Add an observer to the timeseriesdb class for progress

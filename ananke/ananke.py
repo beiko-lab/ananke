@@ -4,12 +4,12 @@
 
 import argparse
 
-from timeclust_tabulate import aggregate
-from timeclust_cluster import run_cluster
-from timeclust_database import TimeSeriesData
-from timeclust_simulate import create_simulation_data, score_simulation
-from timeclust_stats import print_database_info
-from timeclust_misc import translate_otus
+from ananke_tabulate import aggregate
+from ananke_cluster import run_cluster
+from ananke_database import TimeSeriesData
+from ananke_simulate import create_simulation_data, score_simulation
+from ananke_stats import print_database_info
+from ananke_misc import translate_otus
 
 def main():
     #  Argument parsing

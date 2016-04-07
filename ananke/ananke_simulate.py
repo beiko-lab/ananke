@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.sparse import csr_matrix
-from timeclust_database import TimeSeriesData
+from ananke_database import TimeSeriesData
 from sklearn import metrics
 
 def generate_random_trials(template, ntimepoints, nreps):

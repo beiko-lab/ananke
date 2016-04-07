@@ -8,7 +8,7 @@ import argparse
 import multiprocessing
 from functools import partial
 
-from timeclust_database import TimeSeriesData
+from ananke_database import TimeSeriesData
 
 #Input:
 #  - Tab-separated table file with sequence hash as rownames, time points as column names, sequence abundances as entries
