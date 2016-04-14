@@ -9,7 +9,7 @@ from ananke_cluster import run_cluster
 from ananke_database import TimeSeriesData
 from ananke_simulate import create_simulation_data, score_simulation
 from ananke_stats import print_database_info
-from ananke_misc import translate_otus
+from ananke_misc import translate_otus, rarefy_even
 
 def main():
     #  Argument parsing
@@ -33,6 +33,10 @@ def main():
     filter_parser.add_argument("-o", metavar="output", help="Filename for output filtered data file", required=True, type=str)
     filter_parser.add_argument("-t", metavar="threshold", help="Threshold for filtering criterion", required=True, type=str)
     filter_parser.add_argument("-f", metavar="filter", help="Filter type: proportion, abundance, presence", required=True, type=str, default='presence')
+
+    #  Rarefy script options
+    rarefy_parser = subparsers.add_parser("rarefy")
+    rarefy_parser.add_argument("-i", metavar="input", help="HDF5 data file", required=True, type=str)
 
     #  Cluster script options
     cluster_parser = subparsers.add_parser("cluster")
@@ -88,7 +92,10 @@ def main():
         timeseriesdb = TimeSeriesData(args.i)
         print_database_info(timeseriesdb)
     elif args.subparser_name == "translate_clusters":
-        translate_otus(args.i, args.c, args.o) 
+        translate_otus(args.i, args.c, args.o)
+    elif args.subparser_name == "rarefy":
+        timeseriesdb = TimeSeriesData(args.i)
+        rarefy_even(timeseriesdb)
 
 if __name__ == "__main__":
     main()

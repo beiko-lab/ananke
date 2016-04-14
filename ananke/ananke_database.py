@@ -33,6 +33,9 @@ class TimeSeriesData(object):
             h5_table["genes"].require_dataset("clusters", shape=(1,1), dtype=h5.special_dtype(vlen=bytes), maxshape=(None,None), exact=False)
             h5_table["genes"].require_dataset("taxonomy", shape=(1,), dtype=h5.special_dtype(vlen=bytes), maxshape=(None,), exact=False)
             h5_table["genes"].require_dataset("sequenceclusters", shape=(1,), dtype=h5.special_dtype(vlen=bytes), maxshape=(None,), exact=False)
+            #Fill some arrays with ghost values so rhdf5 doesn't segfault
+            self.fill_array("genes/taxonomy","None")
+            self.fill_array("genes/sequenceclusters","None")
         if "samples" not in h5_table:
             h5_table.create_group("samples")
             h5_table["samples"].require_dataset("names", shape=(1,), dtype=h5.special_dtype(vlen=bytes), maxshape=(None,), exact=False)
@@ -45,21 +48,23 @@ class TimeSeriesData(object):
         self._ts_indptr_index = 0
 
     def __del__(self):
-		#Close the file connection
+        #Close the file connection
         self.h5_table.close()
 
     def version_greater_than(self, version):
-		major, minor, release = self.h5_table.attrs["origin_version"].split(".")
-		comp_major, comp_minor, comp_release = version.split(".")
-		if int(major) > int(comp_major):
-			return True
-		elif int(major) == int(comp_major):
-			if int(minor) > int(comp_minor):
-				return True
-			elif int(minor) == int(comp_minor):
-				if int(release) > int(comp_release):
-					return True
-		return False
+        if "origin_version" not in self.h5_table.attrs:
+            return False
+        major, minor, release = self.h5_table.attrs["origin_version"].split(".")
+        comp_major, comp_minor, comp_release = version.split(".")
+        if int(major) > int(comp_major):
+            return True
+        elif int(major) == int(comp_major):
+            if int(minor) > int(comp_minor):
+                return True
+            elif int(minor) == int(comp_minor):
+                if int(release) > int(comp_release):
+                    return True
+        return False
         
     def resize_data(self, ngenes=None, nsamples=None, nobs=None):
         #If any of the parameters are not set, try to infer them
@@ -81,10 +86,8 @@ class TimeSeriesData(object):
         self.h5_table["samples/names"].resize((nsamples,))
         self.h5_table["samples/time"].resize((nsamples,))
         self.h5_table["samples/metadata"].resize((nsamples,))
-        self.h5_table["samples/mask"].resize((nsamples,))
-        #Fill some arrays with ghost values so rhdf5 doesn't segfault
-        self.fill_array("genes/taxonomy","None")
-        self.fill_array("genes/sequenceclusters","None")
+        if self.version_greater_than("0.1.0"):
+            self.h5_table["samples/mask"].resize((nsamples,))
 
     def fill_array(self, target, value):
         n = self.h5_table[target].shape[0]
@@ -96,7 +99,7 @@ class TimeSeriesData(object):
         self.h5_table["samples/names"][:] = names_list
         
     def add_mask(self, mask_list):
-		self.h5_table["samples/mask"][:] = mask_list
+        self.h5_table["samples/mask"][:] = mask_list
 
     def add_timepoints(self, timepoints_list):
         self.h5_table["samples/time"][:] = timepoints_list
@@ -155,9 +158,24 @@ class TimeSeriesData(object):
         n = self.h5_table[target].shape[0]
         chunks = np.append(np.arange(0,n,1000), n)
         for i in range(len(chunks)-1):
-            self.h5_table[target][chunks[i]:chunks[i+1]] = array[chunks[i]:chunks[i+1]]
-            
-    def get_sparse_matrix(self, chunk_size=1000):
+            #  Don't overrun the source array
+            #  and only fill the front of the target
+            if (chunks[i+1] >= len(array)):
+                self.h5_table[target][chunks[i]:len(array)] = array[chunks[i]:len(array)]
+                break
+            else:
+                self.h5_table[target][chunks[i]:chunks[i+1]] = array[chunks[i]:chunks[i+1]]
+    
+    def get_array_by_chunks(self, target, chunk_size = 1000):
+        arr = np.empty(self.h5_table[target].shape,dtype=self.h5_table[target].dtype)
+        chunks = range(0, arr.shape[0], chunk_size)
+        if chunks[-1] != arr.shape[0]:
+            chunks = chunks + [arr.shape[0]]
+        for i,j in zip(chunks[0:-1], chunks[1:]):
+            arr[i:j] = self.h5_table[target][i:j]
+        return arr
+        
+    def get_sparse_matrix(self, chunk_size = 1000):
         data = np.empty(self.h5_table["timeseries/data"].shape)
         indices = np.empty(self.h5_table["timeseries/indices"].shape)
         indptr = np.empty(self.h5_table["timeseries/indptr"].shape)       
@@ -182,11 +200,11 @@ class TimeSeriesData(object):
         return self.h5_table["samples/time"]
         
     def get_mask(self):
-		if self.version_greater_than("0.1.0"):
-		    return self.h5_table["samples/mask"]
-		else:
-			#We didn't support multi time-series, so return a dummy mask
-			return [1]*len(self.h5_table["samples/names"])
+        if self.version_greater_than("0.1.0"):
+            return self.h5_table["samples/mask"]
+        else:
+            #We didn't support multi time-series, so return a dummy mask
+            return [1]*len(self.h5_table["samples/names"])
 
     def get_cluster_labels(self, i):
         return self.h5_table["genes/clusters"][:,i]
