@@ -70,13 +70,16 @@ def sts_matrix_generator(ind, slope_matrix):
     return (ind, dists)
 
 #  DBSCAN from scikit learn     
-def cluster_dbscan(dist_matrix, eps=1):
-    dbs = DBSCAN(eps=eps, metric='precomputed', min_samples=2)
+def cluster_dbscan(dist_matrix, eps=1, distance_measure="sts"):
+    if (distance_measure == "sts"):
+        dbs = DBSCAN(eps=eps, metric='precomputed', min_samples=2)
+    else:
+        dbs = DBSCAN(eps=eps, metric=distance_measure, min_samples=2)
     cluster_labels = dbs.fit_predict(dist_matrix)
     return cluster_labels
 
 #  Main method
-def run_cluster(timeseriesdata_path, num_cores, param_min=0.01, param_max=1000, param_step=0.01):
+def run_cluster(timeseriesdata_path, num_cores, param_min=0.01, param_max=1000, param_step=0.01, distance_measure="sts"):
     print("Loading time-series database file")
     timeseriesdb = TimeSeriesData(timeseriesdata_path)
     print("Importing time-series matrix")
@@ -84,15 +87,18 @@ def run_cluster(timeseriesdata_path, num_cores, param_min=0.01, param_max=1000, 
     time_points = timeseriesdb.get_time_points()
     mask = timeseriesdb.get_mask()
     matrix = matrix.todense()
-    if matrix.shape[0] > 1:
-        #Normalize the matrix for sequence depth then into Z-scores
-        print("Normalizing matrix")
-        matrix = matrix/matrix.sum(0)
-        #Normalizing is an issue if you have a column that was completely filtered
-        #Set these columns back to 0
-        matrix[np.invert(np.isfinite(matrix))] = 0
-        #Standardize to Z-scores
-        norm_matrix = np.apply_along_axis(lambda x: (x-np.mean(x))/np.std(x),1,matrix)
+    nrows = matrix.shape[0]
+    if nrows <= 1:
+        raise ValueError, "Time-series matrix contains no information. Was all of your data filtered out?"
+    #Normalize the matrix for sequence depth then into Z-scores
+    print("Normalizing matrix")
+    matrix = matrix/matrix.sum(0)
+    #Normalizing is an issue if you have a column that was completely filtered
+    #Set these columns back to 0
+    matrix[np.invert(np.isfinite(matrix))] = 0
+    #Standardize to Z-scores
+    norm_matrix = np.apply_along_axis(lambda x: (x-np.mean(x))/np.std(x),1,matrix)
+    if (distance_measure == "sts"):
         print("Calculating slopes")
         slope_matrix = calculate_slopes(norm_matrix, time_points, mask)
         print("Generating STS distance matrix")
@@ -106,10 +112,13 @@ def run_cluster(timeseriesdata_path, num_cores, param_min=0.01, param_max=1000, 
     #TODO: Make it so that it doesn't record until the first param where nclusters >1
     parameter_range = np.arange(param_min, param_max, param_step)
     actual_parameters = []
-    cluster_label_matrix = np.empty(shape=(sts_dist_matrix.shape[0],len(parameter_range)), dtype=int)
+    cluster_label_matrix = np.empty(shape=(nrows,len(parameter_range)), dtype=int)
     for ind, eps in enumerate(parameter_range):
         actual_parameters.append(eps)
-        cluster_labels = cluster_dbscan(sts_dist_matrix, eps)
+        if (distance_measure == "sts"):
+            cluster_labels = cluster_dbscan(sts_dist_matrix, eps)
+        else:
+            cluster_labels = cluster_dbscan(norm_matrix, eps, distance_measure)
         nclusters = len(list(np.unique(cluster_labels)))
         cluster_label_matrix[:,ind] = cluster_labels
         if nclusters > 1:
@@ -122,7 +131,7 @@ def run_cluster(timeseriesdata_path, num_cores, param_min=0.01, param_max=1000, 
         else:
           prev_nclusters = nclusters
     #Print out the clusters with their sequence IDs
-    timeseriesdb.h5_table["genes/clusters"].resize((sts_dist_matrix.shape[0],len(actual_parameters)))
+    timeseriesdb.h5_table["genes/clusters"].resize((nrows,len(actual_parameters)))
     for i in range(0,cluster_label_matrix.shape[0]):
         timeseriesdb.h5_table["genes/clusters"][i,:] = cluster_label_matrix[i,0:len(actual_parameters)]
     timeseriesdb.h5_table["genes/clusters"].attrs.create("param_min", param_min)

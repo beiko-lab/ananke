@@ -45,6 +45,7 @@ def main():
     cluster_parser.add_argument("-l", metavar="min_eps", help="Lower bound for epsilon for clustering step.", default=0.01, required=False, type=float)
     cluster_parser.add_argument("-u", metavar="max_eps", help="Upper bound for epsilon for clustering step.", default=10.0, required=False, type=float)
     cluster_parser.add_argument("-s", metavar="step_eps", help="Step size for epsilon for clustering step.", default=0.01, required=False, type=float)
+    cluster_parser.add_argument("-d", metavar="dist_measure", help="Distance measure (default: sts, Options: sts, euclidean, cityblock, cosine, l1, l2, manhattan)", required=False, type=str, default="sts")
 
     #  Status script options
     status_parser = subparsers.add_parser("info")
@@ -76,7 +77,7 @@ def main():
         timeseriesdb = TimeSeriesData(args.i)
         timeseriesdb.filter_data(args.o, float(args.t), args.f)
     elif args.subparser_name == "cluster":
-        run_cluster(args.i, int(args.n), args.l, args.u, args.s)
+        run_cluster(args.i, int(args.n), args.l, args.u, args.s, args.d)
     elif args.subparser_name == "add":
         if args.action == "taxonomy":
             timeseriesdb = TimeSeriesData(args.i)

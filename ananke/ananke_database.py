@@ -13,6 +13,7 @@ class TimeSeriesData(object):
     def __init__(self, h5_file):
         #Create the new file
         h5_table = h5.File(h5_file, 'a')
+        self.h5_table = h5_table
         #Open or create the required groups:
         #Create the required datasets (initialize empty)
         if "timeseries" not in h5_table:
@@ -42,7 +43,6 @@ class TimeSeriesData(object):
             h5_table["samples"].require_dataset("time", shape=(1,), dtype=np.dtype('int32'), maxshape=(None,), exact=False)
             h5_table["samples"].require_dataset("metadata", shape=(1,), dtype=h5.special_dtype(vlen=bytes), maxshape=(None,), exact=False)
             h5_table["samples"].require_dataset("mask", shape=(1,), dtype=h5.special_dtype(vlen=bytes), maxshape=(None,), exact=False)
-        self.h5_table = h5_table
         #These indices help us populate the timeseries sparse matrix
         self._ts_data_index = 0
         self._ts_indptr_index = 0
@@ -256,9 +256,14 @@ class TimeSeriesData(object):
             sample_name_array = self.h5_table["samples/names"]
             new_timeseriesdb.add_names(sample_name_array)
             time_points = self.h5_table["samples/time"][:]
-            mask = self.h5_table["samples/mask"][:]
             new_timeseriesdb.add_timepoints(time_points)
-            new_timeseriesdb.add_mask(mask)
+            if self.version_greater_than("0.1.0"):
+                mask = self.h5_table["samples/mask"][:]
+                new_timeseriesdb.add_mask(mask)
+            else:
+                #We still need this, but make it dummy values
+                mask = [0] * self.h5_table["samples/metadata"].shape[0]
+                new_timeseriesdb.add_mask(mask)
             #Put into HDF5 file by chunks because otherwise memory usage balloons
             new_timeseriesdb.insert_array_by_chunks("timeseries/data", filtered_data)
             new_timeseriesdb.insert_array_by_chunks("timeseries/indptr", filtered_indptr)
