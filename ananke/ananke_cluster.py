@@ -97,7 +97,12 @@ def run_cluster(timeseriesdata_path, num_cores, param_min=0.01, param_max=1000, 
     #Set these columns back to 0
     matrix[np.invert(np.isfinite(matrix))] = 0
     #Standardize to Z-scores
-    norm_matrix = np.apply_along_axis(lambda x: (x-np.mean(x))/np.std(x),1,matrix)
+    norm_matrix = matrix
+    for mask_val in np.unique(mask):
+        y = norm_matrix[:,np.where(mask==mask_val)[0]]
+        y = np.apply_along_axis(lambda x: (x-np.mean(x))/np.std(x),1,y)
+        norm_matrix[:,np.where(mask==mask_val)[0]] = y
+        del y
     if (distance_measure == "sts"):
         print("Calculating slopes")
         slope_matrix = calculate_slopes(norm_matrix, time_points, mask)
