@@ -1,0 +1,219 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <title>Ananke by beiko-lab</title>
+
+    <link rel="stylesheet" href="stylesheets/styles.css">
+    <link rel="stylesheet" href="stylesheets/github-light.css">
+    <script src="javascripts/scale.fix.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+    <!--[if lt IE 9]>
+    <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+  </head>
+  <body>
+    <div class="wrapper">
+      <header>
+        <h1 class="header">Ananke</h1>
+        <p class="header">Ananke: Clustering marker gene data by time-series patterns</p>
+
+        <ul>
+          <li class="download"><a class="buttons" href="https://github.com/beiko-lab/ananke/zipball/master">Download ZIP</a></li>
+          <li class="download"><a class="buttons" href="https://github.com/beiko-lab/ananke/tarball/master">Download TAR</a></li>
+          <li><a class="buttons github" href="https://github.com/beiko-lab/ananke">View On GitHub</a></li>
+        </ul>
+
+        <p class="header">This project is maintained by <a class="header name" href="https://github.com/beiko-lab">beiko-lab</a></p>
+
+
+      </header>
+      <section>
+        <h1>
+<a id="ananke-clustering-marker-gene-data-by-time-series-patterns" class="anchor" href="#ananke-clustering-marker-gene-data-by-time-series-patterns" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a><em>Ananke</em>: Clustering marker gene data by time-series patterns</h1>
+
+<p><em>Ananke</em> is a tool to cluster your marker gene data (such as 16S) by time-series abundance patterns. This creates groups of sequences that have shown the same changes in response to the environment. This tool facilitates the generation of the clusters, and the companion <a href="https://github.com/beiko-lab/ananke-ui">ananke-ui</a> application aids in the exploration of the results.</p>
+
+<h2>
+<a id="installation" class="anchor" href="#installation" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Installation</h2>
+
+<p>The following Python packages are required:</p>
+
+<ul>
+<li>h5py &gt;= 2.3.1</li>
+<li>numpy &gt;= 1.6</li>
+<li>scipy &gt;= 0.16.1</li>
+<li>scikit-learn &gt;= 0.16</li>
+<li>pandas &gt;= 0.17</li>
+</ul>
+
+<p>To install <em>Ananke</em>, download the <a href="https://github.com/beiko-lab/ananke/archive/master.zip">source code</a>, and in the extracted directory run:</p>
+
+<pre><code>python setup.py install
+</code></pre>
+
+<p>This can be run as root if you want to install <em>Ananke</em> globally.</p>
+
+<h2>
+<a id="running-ananke" class="anchor" href="#running-ananke" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Running ananke</h2>
+
+<h3>
+<a id="required-input-data" class="anchor" href="#required-input-data" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Required input data</h3>
+
+<p><em>Ananke</em> requires a pretty minimal set of input data. It requires a FASTA sequence file and a metadata mapping file. The sequence file contains all sequences (pre-filtered for quality, if desired) with the sample ID in the FASTA header, followed by a sequence count. Sequences must be on a single line. For example:</p>
+
+<pre><code>&gt;Sample1_0
+ATGCGCATGCTATGCAT
+&gt;Sample1_1
+ATCGAGCATCGATCGAC
+&gt;Sample2_0
+AGCGATCGATCGATCGAT
+...
+</code></pre>
+
+<p>If your FASTA file has sequences split into multiple lines, the clever guys who made <a href="https://github.com/torognes/swarm#linearization">SWARM</a> have a little awk script to convert it to the required format:</p>
+
+<pre><code>awk 'NR==1 {print ; next} {printf /^&gt;/ ? "\n"$0"\n" : $1} END {printf "\n"}' amplicons.fasta &gt; amplicons_linearized.fasta
+</code></pre>
+
+<p>The metadata file is a tab-separated sheet with the first column label as "#SampleID" and one of the metadata columns must contain the time offset. The metadata file from a QIIME analysis is compatible:</p>
+
+<pre><code>#SampleID time_points
+Sample1 0
+Sample2 1
+Sample3 5
+Sample4 10
+...
+</code></pre>
+
+<p>Note that you may only have one sample per time-point.</p>
+
+<h3>
+<a id="processing-pipeline" class="anchor" href="#processing-pipeline" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Processing pipeline</h3>
+
+<p>There are several individual steps in the pipeline, listed below with the <em>Ananke</em> subcommand in brackets.</p>
+
+<ol>
+<li>Tabulate unique sequences, creating a <em>m</em> x <em>n</em> time-series matrix, where <em>m</em> = number of unique sequences and <em>n</em> = number of time points (<em>tabulate</em>)</li>
+<li>Filter out low information sequences (<em>filter</em>)</li>
+<li>Cluster sequences using short time-series distance and DBSCAN (<em>cluster</em>)</li>
+<li>(Optional) Add taxonomic information for the unique sequences (<em>add taxonomy</em>)</li>
+<li>(Optional) Add sequence clustering (i.e., 97% OTU) information for the unique sequences (<em>add sequence_clusters</em>)</li>
+</ol>
+
+<h3>
+<a id="step-1-tabulating-sequences" class="anchor" href="#step-1-tabulating-sequences" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Step 1: Tabulating sequences</h3>
+
+<p><em>ananke tabulate -i sequence_input -o hdf5_output -f unique_sequence_output -m mapping_file -t column_name</em>:</p>
+
+<ul>
+<li>-<strong>i</strong>: input FASTA file location</li>
+<li>-<strong>o</strong>: output HDF5 database file location</li>
+<li>-<strong>f</strong>: output unique sequence FASTA file location</li>
+<li>-<strong>m</strong>: input metadata file location (tab-separated)</li>
+<li>-<strong>t</strong>: name of column that describes time-point offset</li>
+</ul>
+
+<p>Example:</p>
+
+<pre><code>ananke tabulate -i sequences.fasta -o ananke_db.h5 -f seq.unique.fasta -m sequence_metadata.tsv -t time_points
+</code></pre>
+
+<h3>
+<a id="step-2-filtering-sequences" class="anchor" href="#step-2-filtering-sequences" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Step 2: Filtering sequences</h3>
+
+<p>Sequences can be filtered in one of three ways:</p>
+
+<ul>
+<li>
+<em>proportion</em>: if a sequuence accounts for less than threshold % of the data, filter it</li>
+<li>
+<em>abundance</em>: if a sequence was seen less than threshold times in total, filter it</li>
+<li>
+<em>presence</em>: if a sequence was seen in fewer than threshold % of time-points, filter it</li>
+</ul>
+
+<p>Due to the magnitude of many high-throughput sequencing data sets, it is a good idea to filter to less than 20,000 unique sequences. Since the software currently calculates a complete <em>m</em> x <em>m</em> distance matrix between sequences, this can take a lot of RAM for large <em>m</em>.</p>
+
+<p><em>ananke filter -i hdf5_input -o hdf5_output -f filter_type -t filter_threshold</em>:</p>
+
+<ul>
+<li>-<strong>i</strong>: input HDF5 database file location</li>
+<li>-<strong>o</strong>: output HDF5 filtered database file location</li>
+<li>-<strong>f</strong>: filter type (one of <em>proportion</em>, <em>abundance</em>, or <em>presence</em> (default))</li>
+<li>-<strong>t</strong>: threshold value</li>
+</ul>
+
+<p>Example:</p>
+
+<pre><code>#Filter all unique sequences with &lt; 100 occurrences
+ananke filter -i ananke_db.h5 -o ananke_db_filtered.h5 -f abundance -t 100
+</code></pre>
+
+<h3>
+<a id="step-3-cluster-sequences" class="anchor" href="#step-3-cluster-sequences" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Step 3: Cluster sequences</h3>
+
+<p>Sequences are clustered by DBSCAN and results are placed into the existing HDF5 time-series database. Each data set is unique, and therefore will require clustering over a different range of <em>epsilon</em> parameters. A good bet is to calculate from 0.1 to 100 in steps of 0.1. You should find the number of clusters (which are printed to screen during computation) increases to a point, and begins decreasing. This should occur well before <em>eps</em>=100, but the clustering will halt once <em>eps</em> is large enough that everything is clustered into one group. Please note that small step sizes will take up a lot of disk space, as the results are all written to disk. </p>
+
+<p><em>ananke cluster -i hdf5_input -n num_threads -l eps_lower_limit -u eps_upper_limit -s eps_step_size</em>:</p>
+
+<ul>
+<li>-<strong>i</strong>: input HDF5 database file location</li>
+<li>-<strong>n</strong>: number of threads available for computing short time-series distances</li>
+<li>-<strong>l</strong>: <em>eps</em> clustering parameter minimum value (must be strictly greater than 0)</li>
+<li>-<strong>u</strong>: <em>eps</em> clustering parameter max value (will stop before this if data merges into a single cluster)</li>
+<li>-<strong>s</strong>: <em>eps</em> clustering parameter step-size</li>
+</ul>
+
+<p>Example:</p>
+
+<pre><code>ananke cluster -i ananke_db_filtered.h5 -n 8 -l 0.1 -u 100 -s 0.1
+</code></pre>
+
+<h3>
+<a id="optional-step-4-and-5-add-additional-information-to-database" class="anchor" href="#optional-step-4-and-5-add-additional-information-to-database" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>(Optional) Step 4 and 5: Add additional information to database</h3>
+
+<p>You can add taxonomic classification and sequence identity cluster information to the time-series database file, and these will appear in the <a href="https://github.com/beiko-lab/ananke-ui">ananke-ui</a> interface for contrasting with the time-series clusters.</p>
+
+<p>You can use the unique sequences file from the <em>tabulate</em> step as the basis for this information. The labels in this file will match up with the labels used in the time-series database, allowing the information to be properly merged. The unique sequence file has size information contained in the FASTA header to enable it to work with clustering software like USEARCH/UPARSE. This must be removed from the resulting taxonomy and OTU cluster files by using sed: <code>sed -i 's/;size=[0-9]*;//g' taxonomy.txt</code></p>
+
+<p>A more thorough example of how to do this is given <a href="https://github.com/beiko-lab/ananke/wiki/Generating-OTUs-and-taxonomy-for-import-into-ananke">in the wiki</a>.</p>
+
+<p><em>ananke add taxonomy -i hdf5_input -d taxonomy_data</em>
+<em>ananke add sequence_clusters -i hdf5_input -d sequence_cluster_data</em>:</p>
+
+<ul>
+<li>-<strong>i</strong>: input HDF5 database file location</li>
+<li>-<strong>d</strong>: data file (e.g., tax_assignments.txt for taxonomy, or seq_otus.txt for sequence clusters)</li>
+</ul>
+
+<p>Examples:</p>
+
+<pre><code>ananke add taxonomy -i ananke_db_filtered.h5 -d seq.unique_tax_assignments.txt
+ananke add sequence_clusters -i ananke_db_filtered.h5 -d seq_otus.txt
+</code></pre>
+
+<p>If you already have an OTU clustering scheme you would like to use, it must be translated so that the labels are consistent. For this, you require the sequence FASTA file that you used as input to your clustering pipeline, and the resulting OTU cluster file (in QIIME's tab-separated format, see Output section here: <a href="http://qiime.org/scripts/pick_otus.html">http://qiime.org/scripts/pick_otus.html</a>). The output of this script can be used as the input to <code>ananke add sequence_clusters</code>.</p>
+
+<p><em>ananke translate_clusters -i fasta_input -c clusters_input -o clusters_output</em></p>
+
+<ul>
+<li>-<strong>i</strong>: input FASTA file used to generate your clusters</li>
+<li>-<strong>c</strong>: input clustering scheme in tab-separated format (same format as QIIME outputs)</li>
+<li>-<strong>o</strong>: desired output cluster file name</li>
+</ul>
+
+<p>Example:</p>
+
+<pre><code>ananke translate_clusters -i seq.fasta -c seq_otus.txt -o seq_otus_translated.txt
+</code></pre>
+      </section>
+      <footer>
+        <p><small>Hosted on <a href="https://pages.github.com">GitHub Pages</a> using the Dinky theme</small></p>
+      </footer>
+    </div>
+    <!--[if !IE]><script>fixScale(document);</script><![endif]-->
+		
+  </body>
+</html>
