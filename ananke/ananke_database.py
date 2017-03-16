@@ -128,7 +128,7 @@ class TimeSeriesData(object):
         with open(input_filename, 'r') as in_file:
             for line in in_file:
                 line = line.split("\t")
-                sequence_to_tax[line[0]] = line[1]
+                sequence_to_tax[line[0]] = line[1].strip()
         tax_list = np.empty(shape=self.h5_table["genes/sequenceids"].shape, dtype=object)
         for i, sequence_id in enumerate(self.h5_table["genes/sequenceids"]):
             try:
