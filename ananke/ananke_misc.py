@@ -42,7 +42,7 @@ def rarefy_even(timeseriesdb):
   min_depth = min(np.ravel(matrix.sum(0)))
   print("Minimum sequence depth: " + str(min_depth))
   if (min_depth == 0):
-    raise ValueError, "Error: Lowest sample depth equal to zero."
+    raise ValueError("Error: Lowest sample depth equal to zero.")
   for col_index in range(matrix.shape[1]):
     nsample = min_depth
     counts = np.ravel(matrix[:,col_index])

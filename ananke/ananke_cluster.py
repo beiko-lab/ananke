@@ -8,7 +8,7 @@ import argparse
 import multiprocessing
 from functools import partial
 
-from ananke_database import TimeSeriesData
+from .ananke_database import TimeSeriesData
 
 #Input:
 #  - Tab-separated table file with sequence hash as rownames, time points as column names, sequence abundances as entries
@@ -31,7 +31,7 @@ def calculate_slopes(matrix, time_points, mask):
     time_difference = time_points[1:] - time_points[0:len(time_points)-1]
     time_difference = time_difference[border]
     if (min(time_difference) <= 0):
-        raise ValueError, "Minimum time difference is less than or equal to zero (may be caused by two consecutive samples with identical time points)"
+        raise ValueError("Minimum time difference is less than or equal to zero (may be caused by two consecutive samples with identical time points)")
     slope_matrix = matrix[:, 1:]-matrix[:, 0:matrix.shape[1]-1]
     slope_matrix = slope_matrix[:,border]
     slope_matrix = slope_matrix / time_difference
@@ -89,7 +89,7 @@ def run_cluster(timeseriesdata_path, num_cores, param_min=0.01, param_max=1000, 
     matrix = matrix.todense()
     nrows = matrix.shape[0]
     if nrows <= 1:
-        raise ValueError, "Time-series matrix contains no information. Was all of your data filtered out?"
+        raise ValueError("Time-series matrix contains no information. Was all of your data filtered out?")
     #Normalize the matrix for sequence depth then into Z-scores
     print("Normalizing matrix")
     matrix = matrix/matrix.sum(0)

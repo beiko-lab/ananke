@@ -4,12 +4,12 @@
 
 import argparse
 
-from ananke_tabulate import aggregate
-from ananke_cluster import run_cluster
-from ananke_database import TimeSeriesData
-from ananke_simulate import create_simulation_data, score_simulation
-from ananke_stats import print_database_info
-from ananke_misc import translate_otus, rarefy_even
+from .ananke_tabulate import aggregate
+from .ananke_cluster import run_cluster
+from .ananke_database import TimeSeriesData
+from .ananke_simulate import create_simulation_data, score_simulation
+from .ananke_stats import print_database_info
+from .ananke_misc import translate_otus, rarefy_even
 
 def main():
     #  Argument parsing

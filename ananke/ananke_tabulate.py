@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 
+import sys
 import pandas as pd
 import numpy as np
 from collections import defaultdict
-from ananke_database import TimeSeriesData
+from .ananke_database import TimeSeriesData
 import warnings
 
 #  TODO: - Add an observer to the timeseriesdb class for progress
@@ -18,10 +19,10 @@ def aggregate(sequence_path, metadata_path, time_name, \
     try:
         time_points = np.sort(mm[time_name].unique())
     except:
-        raise KeyError, "Specified time point column name is not found in metadata file"
+        raise KeyError("Specified time point column name is not found in metadata file")
     if time_mask is not None:
         if time_mask not in mm:
-            raise KeyError, "Specified time mask column name is not found in metadata file"
+            raise KeyError("Specified time mask column name is not found in metadata file")
         else:
             #Get the values sorted by mask first, then time points
             mm = mm.sort_values(by=[time_mask,time_name])
@@ -52,12 +53,18 @@ def aggregate(sequence_path, metadata_path, time_name, \
                 prev_sample_name = sample_name
             else:
                 #Skip the next sequence
-                seqf.next()
+                if sys.version_info[0] >= 3:
+                    seqf.readline()
+                else:
+                    seqf.next()
                 i += 1
                 skipped += 1
                 skipped_samples.add(sample_name)
                 continue
-        sequence = seqf.next().strip()
+        if sys.version_info[0] >= 3:
+            sequence = seqf.readline().strip()
+        else:
+            sequence = seqf.next().strip()
         assert sequence[0] != ">", "Expected sequence, got label. Is \
           your FASTA file one-line-per-sequence?"
         if size_labels:
@@ -77,7 +84,7 @@ def aggregate(sequence_path, metadata_path, time_name, \
     ngenes = len(seqcount)
     nsamples = len(sample_name_array)
     nobs = 0
-    for sequence, abundance_dict in seqcount.iteritems():
+    for sequence, abundance_dict in seqcount.items():
         nobs += len(abundance_dict)
     timeseriesdb.resize_data(ngenes, nsamples, nobs)
     timeseriesdb.add_names(sample_name_array)
@@ -94,7 +101,7 @@ def aggregate(sequence_path, metadata_path, time_name, \
     unique_indices = []
     hashseq_list = []
     j = 0
-    for sequence, abundance_dict in seqcount.iteritems():
+    for sequence, abundance_dict in seqcount.items():
         hashseq = hash(sequence)
         hashseq_list.append(hashseq)
         abundance_list = []

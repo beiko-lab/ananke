@@ -2,7 +2,7 @@ import h5py as h5
 import numpy as np
 from scipy.sparse import csr_matrix
 from os import getcwd
-from __init__ import __version__
+from .__init__ import __version__
 
 #  TODO: - Better check of what is populated when opening a file
 #        - Add a version number param to help with future-proofing
@@ -22,7 +22,7 @@ class TimeSeriesData(object):
             h5_table["timeseries"].require_dataset("indices", shape=(1,), dtype=np.dtype('int32'), maxshape=(None,))
             h5_table["timeseries"].require_dataset("indptr", shape=(1,), dtype=np.dtype('int32'), maxshape=(None,))
             #Keeps track of which version created the file
-            h5_table.attrs.create("origin_version", __version__)
+            h5_table.attrs.create("origin_version", str(__version__), dtype=h5.special_dtype(vlen=bytes))
             self.filled_data = False
         else:
             #TODO: More sophisticated check of what's populated
@@ -54,7 +54,7 @@ class TimeSeriesData(object):
     def version_greater_than(self, version):
         if "origin_version" not in self.h5_table.attrs:
             return False
-        major, minor, release = self.h5_table.attrs["origin_version"].split(".")
+        major, minor, release = self.h5_table.attrs["origin_version"].decode("ASCII").split(".")
         comp_major, comp_minor, comp_release = version.split(".")
         if int(major) > int(comp_major):
             return True
@@ -96,13 +96,16 @@ class TimeSeriesData(object):
             self.h5_table[target][chunks[i]:chunks[i+1]] = [value]*(chunks[i+1]-chunks[i])
 
     def add_names(self, names_list):
-        self.h5_table["samples/names"][:] = names_list
+        b_names_list = [str(x).encode() for x in names_list]
+        self.h5_table["samples/names"][:] = b_names_list
         
     def add_mask(self, mask_list):
-        self.h5_table["samples/mask"][:] = mask_list
+        b_mask_list = [str(x).encode() for x in mask_list]
+        self.h5_table["samples/mask"][:] = b_mask_list
 
     def add_timepoints(self, timepoints_list):
-        self.h5_table["samples/time"][:] = timepoints_list
+        f_timepoints_list = [float(x) for x in timepoints_list]
+        self.h5_table["samples/time"][:] = f_timepoints_list
 
     def add_timeseries_data(self, data, indices, indptr, sequences):
         if not self.filled_data:
@@ -113,7 +116,8 @@ class TimeSeriesData(object):
         self.h5_table["timeseries/data"][self._ts_data_index:self._ts_data_index+len(data)] = data
         self.h5_table["timeseries/indices"][self._ts_data_index:self._ts_data_index+len(indices)] = indices
         self.h5_table["timeseries/indptr"][self._ts_indptr_index:self._ts_indptr_index+len(indptr)] = indptr
-        self.h5_table["genes/sequenceids"][self._ts_indptr_index:self._ts_indptr_index+len(sequences)] = sequences
+        b_sequences = [str(x).encode() for x in sequences]
+        self.h5_table["genes/sequenceids"][self._ts_indptr_index:self._ts_indptr_index+len(sequences)] = b_sequences
         self._ts_data_index += len(data)
         self._ts_indptr_index += len(indptr)
 
@@ -168,7 +172,7 @@ class TimeSeriesData(object):
     
     def get_array_by_chunks(self, target, chunk_size = 1000):
         arr = np.empty(self.h5_table[target].shape,dtype=self.h5_table[target].dtype)
-        chunks = range(0, arr.shape[0], chunk_size)
+        chunks = list(range(0, arr.shape[0], chunk_size))
         if chunks[-1] != arr.shape[0]:
             chunks = chunks + [arr.shape[0]]
         for i,j in zip(chunks[0:-1], chunks[1:]):
@@ -179,17 +183,17 @@ class TimeSeriesData(object):
         data = np.empty(self.h5_table["timeseries/data"].shape)
         indices = np.empty(self.h5_table["timeseries/indices"].shape)
         indptr = np.empty(self.h5_table["timeseries/indptr"].shape)       
-        chunks = range(0, data.shape[0], chunk_size)
+        chunks = list(range(0, data.shape[0], chunk_size))
         if chunks[-1] != data.shape[0]:
             chunks = chunks + [data.shape[0]]
         for i,j in zip(chunks[0:-1], chunks[1:]):
             self.h5_table["timeseries/data"].read_direct(data,np.s_[i:j],np.s_[i:j])       
-        chunks = range(0, indices.shape[0], chunk_size)
+        chunks = list(range(0, indices.shape[0], chunk_size))
         if chunks[-1] != indices.shape[0]:
             chunks = chunks + [indices.shape[0]]
         for i,j in zip(chunks[0:-1], chunks[1:]):
             self.h5_table["timeseries/indices"].read_direct(indices,np.s_[i:j],np.s_[i:j])       
-        chunks = range(0, indptr.shape[0], chunk_size)
+        chunks = list(range(0, indptr.shape[0], chunk_size))
         if chunks[-1] != indptr.shape[0]:
             chunks = chunks + [indptr.shape[0]]
         for i,j in zip(chunks[0:-1], chunks[1:]):
@@ -246,7 +250,7 @@ class TimeSeriesData(object):
                 filtered_indptr.append(len(filtered_data))
                 filtered_indices.extend(row_data.indices)
         if len(filtered_data) == 0:
-            raise ValueError, "All data filtered. Consider relaxing filter criterion."
+            raise ValueError("All data filtered. Consider relaxing filter criterion.")
         else:
             new_timeseriesdb = TimeSeriesData(outfile)
             ngenes = len(filtered_indptr)-1
