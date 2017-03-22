@@ -201,11 +201,11 @@ class TimeSeriesData(object):
         return csr_matrix((data, indices, indptr))
         
     def get_time_points(self):
-        return self.h5_table["samples/time"]
+        return self.h5_table["samples/time"][:]
         
     def get_mask(self):
         if self.version_greater_than("0.1.0"):
-            return self.h5_table["samples/mask"]
+            return self.h5_table["samples/mask"][:]
         else:
             #We didn't support multi time-series, so return a dummy mask
             return [1]*len(self.h5_table["samples/names"])

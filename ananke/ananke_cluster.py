@@ -47,7 +47,7 @@ def generate_STS_distance_matrix(slope_matrix, nthreads=4):
     count = 1
     for result in p.imap_unordered(partial_sts_matrix_generator, range(0, nrows-1), 1000):
         ind = result[0]
-        dists = result[1]
+        dists = result[1].flatten()
         sts_dist_matrix[ind,ind:] = dists
         sts_dist_matrix[ind:,ind] = dists
         count += 1
@@ -64,7 +64,7 @@ def sts_matrix_generator(ind, slope_matrix):
     mv = slope_matrix[ind:, :]
     mx_rep = np.vstack((mx,)*mv.shape[0])
     diff = mx_rep - mv
-    diff = diff**2
+    diff = np.square(diff)
     sts_squared = diff.sum(axis=1)
     dists = np.sqrt(sts_squared)
     return (ind, dists)
