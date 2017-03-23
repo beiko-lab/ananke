@@ -88,6 +88,8 @@ class TimeSeriesData(object):
         self.h5_table["samples/metadata"].resize((nsamples,))
         if self.version_greater_than("0.1.0"):
             self.h5_table["samples/mask"].resize((nsamples,))
+        self.fill_array("genes/taxonomy",b"NF")
+        self.fill_array("genes/sequenceclusters",b"NF")
 
     def fill_array(self, target, value):
         n = self.h5_table[target].shape[0]
