@@ -78,6 +78,15 @@ def cluster_dbscan(dist_matrix, eps=1, distance_measure="sts"):
     cluster_labels = dbs.fit_predict(dist_matrix)
     return cluster_labels
 
+def zscore(x):
+    mean = np.mean(x)
+    sd = np.std(x)
+    if sd == 0:
+        z = np.zeros_like(x)
+    else:
+        z = (x-mean)/sd
+    return z
+
 #  Main method
 def run_cluster(timeseriesdata_path, num_cores, param_min=0.01, param_max=1000, param_step=0.01, distance_measure="sts"):
     print("Loading time-series database file")
@@ -100,7 +109,7 @@ def run_cluster(timeseriesdata_path, num_cores, param_min=0.01, param_max=1000, 
     norm_matrix = matrix
     for mask_val in np.unique(mask):
         y = norm_matrix[:,np.where(mask==mask_val)[0]]
-        y = np.apply_along_axis(lambda x: (x-np.mean(x))/np.std(x),1,y)
+        y = np.apply_along_axis(zscore,1,y)
         norm_matrix[:,np.where(mask==mask_val)[0]] = y
         del y
     if (distance_measure == "sts"):
