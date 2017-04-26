@@ -4,7 +4,7 @@
 
 import argparse
 
-from .ananke_tabulate import aggregate
+from ._tabulate import fasta_to_ananke
 from .ananke_cluster import run_cluster
 from .ananke_database import TimeSeriesData
 from .ananke_simulate import create_simulation_data, score_simulation
@@ -72,7 +72,7 @@ def main():
     
     #Route to the proper routines
     if args.subparser_name == "tabulate":
-        aggregate(args.i, args.m, args.t, args.o, args.f, args.multi)
+        fasta_to_ananke(args.i, args.m, args.t, args.o, args.f, args.multi)
     elif args.subparser_name == "filter":
         timeseriesdb = TimeSeriesData(args.i)
         timeseriesdb.filter_data(args.o, float(args.t), args.f)
