@@ -6,12 +6,13 @@ an Ananke HDF5 file.
 """
 import sys
 import warnings
+import hashlib
 
 import pandas as pd
 import numpy as np
 from collections import defaultdict
 
-from .ananke_database import TimeSeriesData
+from ._database import TimeSeriesData
 
 #  TODO: - Add an observer to the timeseriesdb class for progress
 
@@ -41,15 +42,22 @@ def read_metadata(metadata_path, time_name, time_mask):
     except:
         raise KeyError("Specified time point column name (%s) is not found " \
                        "in metadata file." % (time_name,))
+
+    # Check if #SampleID is a column (required for QIIME metadata format)
+    if "#SampleID" not in metadata_mapping:
+        raise KeyError("Metadata mapping file does not start with #SampleID.")
+
     if time_mask is not None:
         if time_mask not in metadata_mapping:
             raise KeyError("Specified time mask column name (%s) is not " \
                            "found in metadata file." % (time_mask,))
         else:
             #Get the values sorted by mask first, then time points
-            metadata_mapping = metadata_mapping.sort_values(by=[time_mask,time_name])
+            metadata_mapping = metadata_mapping.sort_values(by=[time_mask,
+                                                                time_name])
     else:
         metadata_mapping = metadata_mapping.sort_values(by=time_name)
+
     return metadata_mapping
 
 
@@ -64,7 +72,7 @@ def tabulate(seqf, metadata_mapping, size_labels):
         metadata table contained in Pandas DataFrame
     size_labels: boolean
         true if FASTA file is already compressed to unique sequences (and contains USEARCH-style size
-        annotations in the label, i.e., >SEQUENCEID;size=####;
+        annotations in the label, i.e., >SEQUENCEID;size=####
 
     Returns
     -------
@@ -94,6 +102,7 @@ def tabulate(seqf, metadata_mapping, size_labels):
                 prev_sample_name = sample_name
             else:
                 #Skip the next sequence
+                # Readline if py3, next if py2
                 if sys.version_info[0] >= 3:
                     seqf.readline()
                 else:
@@ -109,14 +118,19 @@ def tabulate(seqf, metadata_mapping, size_labels):
         assert sequence[0] != ">", "Expected sequence, got label. Is \
           your FASTA file one-line-per-sequence?"
         if size_labels:
+            if (";" not in line) | ("=" not in line):
+                raise ValueError("FASTA size labels specified but not found.")
             size = line.strip().split(";")[-1].split("=")[-1]
-            seqcount[sequence][sample_name] += int(size) 
+            seqcount[sequence][sample_name] += int(size)
         else:
             seqcount[sequence][sample_name] += 1
         i+=1
         #This needs to be replaced by something better
         if (i%10000 == 0):
-            print(i)
+            sys.stdout.write("\r%d" % i)
+            sys.stdout.flush()
+    sys.stdout.write("\n")
+    sys.stdout.flush()
     if (skipped > 0):
         warnings.warn("Skipped %d sequences (no match to sample name" \
           "in metadata file). Sample names: %s" % (skipped, \
@@ -132,7 +146,7 @@ def write_csr(timeseriesdb, seqcount, outseqf, sample_name_array):
 
     Parameters
     ----------
-    timeseriesdb: ananke.ananke_database.TimeSeriesData
+    timeseriesdb: ananke._database.TimeSeriesData
         TimeSeriesData object that encapsulates a .h5 file
     seqcount: dict {int:{str:int}}
         dict of dicts output from tabulate function
@@ -161,7 +175,9 @@ def write_csr(timeseriesdb, seqcount, outseqf, sample_name_array):
     # At the same time, print each unique sequence and its size to a FASTA
     # file that can be used for clustering and taxonomic classification
     for sequence, abundance_dict in seqcount.items():
-        hashseq = hash(sequence)
+        md5hash = hashlib.md5()
+        md5hash.update(sequence.encode())
+        hashseq = md5hash.hexdigest()
         hashseq_list.append(hashseq)
         abundance_list = []
         rowsum = 0
@@ -230,14 +246,18 @@ def fasta_to_ananke(sequence_path, metadata_path, time_name, \
 
     # Resize the Ananke TimeSeriesData object
     timeseriesdb.resize_data(ngenes, nsamples, nobs)
-    timeseriesdb.add_names(sample_name_array)
-    timeseriesdb.add_timepoints(metadata_mapping[time_name])
+    timeseriesdb.insert_array_by_chunks("samples/names", sample_name_array)
+    timeseriesdb.insert_array_by_chunks("samples/time", 
+                                        metadata_mapping[time_name],
+                                        transform_func = float)
 
     if time_mask is not None:
-        timeseriesdb.add_mask(metadata_mapping[time_mask])
+        timeseriesdb.insert_array_by_chunks("samples/mask",
+                                            metadata_mapping[time_mask])
     else:
         #Set a dummy mask
-        timeseriesdb.add_mask([1]*len(sample_name_array))
+        timeseriesdb.insert_array_by_chunks("samples/mask",
+                                            [1]*len(sample_name_array))
 
     unique_indices = write_csr(timeseriesdb, seqcount, \
                                outseqf, sample_name_array)
@@ -248,5 +268,7 @@ def fasta_to_ananke(sequence_path, metadata_path, time_name, \
     if (len(unique_indices) < nsamples):
         warnings.warn("Number of time-points retrieved from sequence " \
           "file is less than the number of samples in metadata file. " \
-          "%d samples are missing. This is probably not what you want."\
+          "%d samples are missing. Consider removing extraneous samples " \
+          "from the metadata file. You will want to run `ananke filter` to " \
+          "remove empty samples."
           % (nsamples - len(unique_indices),))

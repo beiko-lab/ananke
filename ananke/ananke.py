@@ -6,7 +6,7 @@ import argparse
 
 from ._tabulate import fasta_to_ananke
 from .ananke_cluster import run_cluster
-from .ananke_database import TimeSeriesData
+from ._database import TimeSeriesData
 from .ananke_simulate import create_simulation_data, score_simulation
 from .ananke_stats import print_database_info
 from .ananke_misc import translate_otus, rarefy_even
@@ -29,8 +29,16 @@ def main():
     
     #  Filter script options
     filter_parser = subparsers.add_parser("filter")
-    filter_parser.add_argument("-i", metavar="input", help="HDF5 data file", required=True, type=str)
-    filter_parser.add_argument("-o", metavar="output", help="Filename for output filtered data file", required=True, type=str)
+    filter_parser.add_argument("-i", 
+                               metavar="input", 
+                               help="HDF5 data file", 
+                               required=True, 
+                               type=str)
+    filter_parser.add_argument("-o", 
+                               metavar="output", 
+                               help="Filename for output filtered data file", 
+                               required=True, 
+                               type=str)
     filter_parser.add_argument("-t", metavar="threshold", help="Threshold for filtering criterion", required=True, type=str)
     filter_parser.add_argument("-f", metavar="filter", help="Filter type: proportion, abundance, presence", required=True, type=str, default='presence')
 
@@ -72,12 +80,12 @@ def main():
     
     #Route to the proper routines
     if args.subparser_name == "tabulate":
-        fasta_to_ananke(args.i, args.m, args.t, args.o, args.f, args.multi)
+        fasta_to_ananke(args.i, args.m, args.t, args.o, args.f, args.multi, args.size_labels)
     elif args.subparser_name == "filter":
         timeseriesdb = TimeSeriesData(args.i)
-        timeseriesdb.filter_data(args.o, float(args.t), args.f)
+        timeseriesdb.filter_data(args.o, args.f, args.t)
     elif args.subparser_name == "cluster":
-        run_cluster(args.i, int(args.n), args.l, args.u, args.s, args.d)
+        run_cluster(args.i, int(args.n), args.d, args.l, args.u, args.s)
     elif args.subparser_name == "add":
         if args.action == "taxonomy":
             timeseriesdb = TimeSeriesData(args.i)
