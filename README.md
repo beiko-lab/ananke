@@ -15,9 +15,14 @@ python setup.py install
 ```
 This can be run as root if you want to install *Ananke* globally.
 
+To install locally (to your user directory, or in a Conda environment, once it is loaded) use the --user flag:
+```
+python setup.py install --user
+```
+
 ## Running ananke
 ### Required input data
-*Ananke* requires a pretty minimal set of input data. It requires a FASTA sequence file and a metadata mapping file. The sequence file contains all sequences (pre-filtered for quality, if desired) with the sample ID in the FASTA header, followed by a sequence count. Sequences must be on a single line. For example:
+*Ananke* requires a minimal set of input data. It requires a FASTA sequence file and a metadata mapping file. Sequences should be quality filtered/trimmed/denoised using your preferred quality control methods before processing with Ananke. The required sequence file contains all sequences with the sample ID in the FASTA header, followed by a sequence count. Sequences must be on a single line. For example:
 ```
 >Sample1_0
 ATGCGCATGCTATGCAT
@@ -97,6 +102,8 @@ Sequences are clustered by DBSCAN and results are placed into the existing HDF5 
 - -**l**: *eps* clustering parameter minimum value (must be strictly greater than 0)
 - -**u**: *eps* clustering parameter max value (will stop before this if data merges into a single cluster)
 - -**s**: *eps* clustering parameter step-size
+- -**d**: distance measure. Default is short time-series (sts). Other options are euclidean, cityblock, cosine, l1, l2, manhattan. **Note: sts is the only measure that is computed with multithreading; other measures may be slower to compute.**
+- --**clr**: boolean flag. Indicates whether to use the centre log ratio transform with count zero multplicative zero imputation within time-points/samples. If this flag is not given, the counts within time-points are converted to simple proportions.
 
 Example:
 ```
