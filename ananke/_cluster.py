@@ -7,6 +7,7 @@ from math import sqrt
 import h5py as h5
 import numpy as np
 from scipy.sparse import vstack, coo_matrix
+from scipy.stats.mstats import gmean
 from sklearn.cluster import DBSCAN
 
 from ._database import TimeSeriesData
@@ -171,9 +172,102 @@ def zscore(x):
         z = (x - mean)/sd
     return z
 
+def normalize_simple(matrix, mask):
+    """Normalizes a matrix by columns, and then by rows. With multiple
+    time-series, the data are normalized to the within-series total, not the
+    entire data set total.
+
+    Parameters
+    ----------
+    matrix: np.matrix
+        Time-series matrix of abundance counts. Rows are sequences, columns
+        are samples/time-points.
+    mask: list or np.array
+        List of objects with length matching the number of timepoints, where
+        unique values delineate multiple time-series. If there is only one
+        time-series in the data set, it's a list of identical objects.
+
+    Returns
+    -------
+    normal_matrix: np.matrix
+        Matrix where the columns (within-sample) have been converted to 
+        proportions, then the rows are normalized to sum to 1.
+    """
+    normal_matrix = matrix / matrix.sum(0)
+    normal_matrix[np.invert(np.isfinite(normal_matrix))] = 0
+    for mask_val in np.unique(mask):
+        y = normal_matrix[:, np.where(mask == mask_val)[0]]
+        y = np.apply_along_axis(zscore, 1, y)
+        normal_matrix[:, np.where(mask == mask_val)[0]] = y
+        del y
+    return normal_matrix
+
+def normalize_clr(matrix, delta = 0.65, threshold = 0.5):
+    """Normalizes a matrix by centre log ratio transform with zeros imputed
+    by the count zero multiplicative method from the zCompositions package
+    by Javier Palarea-Albaladejo and Josep Antoni Martin-Fernandez. Uses two
+    parameters, delta and threshold, identically to the zCompositions
+    implementation. This scheme is the same as used by the CoDaSeq R package.
+
+    Parameters
+    ----------
+    matrix: np.matrix
+        Time-series matrix of abundance counts. Rows are sequences, columns
+        are samples/time-points.
+    delta: float
+        Fraction of the upper threshold used to impute zeros (default=0.65)
+    threshold: float
+        For a vector of counts, factor applied to the quotient 1 over the 
+        number of trials (sum of the counts) used to produce an upper limit 
+        for replacing zero counts by the CZM method (default=0.5).
+
+    Returns
+    -------
+    normal_matrix: np.matrix
+        Matrix where the columns (within-sample) have been converted to centre 
+        log ratio transformed values to control for within-sample
+        compositionality, and the rows are brought onto the same scale by
+        computing the Z-score of each element in the time-series.
+    """
+
+    #Zero imputation with count zero multiplicative
+    # This algorithm was originally written with samples as rows
+    # so we need the transpose
+    X = matrix.T
+    #N = nsamples
+    N = X.shape[0]
+    #D = nsequences
+    D = X.shape[1]
+    #Column means without 0's included
+    n = np.apply_along_axis(lambda x: x[np.nonzero(x)].sum(), 1, X)
+    #Replacement matrix
+    replace = delta*np.ones((D,N))*(threshold/n)
+    replace = replace.T
+    #Normalize by columns, using only nonzero values
+    X2 = np.apply_along_axis(lambda x: x/(x[np.nonzero(x)].sum()), 1, X)
+    colmins = np.apply_along_axis(lambda x: x[np.nonzero(x)].min(), 0, X2)
+    corrected = 0
+    for idx, row in enumerate(X2):
+        zero_indices = np.where(row == 0)[1]
+        nonzero_indices = np.where(row != 0)[1]
+        X2[idx, zero_indices] = replace[idx, zero_indices]
+        over_min = np.where(X2[idx, zero_indices] > colmins[zero_indices])
+        if len(over_min[0]) > 0:
+            corrected += len(over_min[0])
+            X2[idx, over_min[1]] = delta*colmins[over_min[1]]
+        X2[idx, nonzero_indices] = (1-X2[idx, zero_indices].sum()) * \
+                                   X2[idx, nonzero_indices]
+    normal_matrix = X2.T
+    # Do the CLR transform
+    normal_matrix = normal_matrix/gmean(normal_matrix)
+    # Normalize within time-series to remove scaling factors
+    normal_matrix = np.apply_along_axis(zscore, 1, normal_matrix)
+    return normal_matrix
+
 #  Main method
 def run_cluster(timeseriesdata_path, num_cores, distance_measure = "sts",
-                param_min = 0.01, param_max = 1000, param_step = 0.01):
+                param_min = 0.01, param_max = 1000, param_step = 0.01,
+                clr = False):
     """For a given Ananke data file, clusters using DBSCAN using the pairwise
     distance measure distance_measure (default short time-series, "sts").
     Clusters over a range of DBSCAN epsilon values, defined by param_min,
@@ -194,6 +288,10 @@ def run_cluster(timeseriesdata_path, num_cores, distance_measure = "sts",
         Maximum epsilon value.
     param_step: float
         Step size between param_min and param_max.
+    clr: boolean
+        Indicates whether to normalize with simple proportions (False, default)
+        or centred log ratio with zero imputation by count zero multiplicative
+        method (True).
     """
     print("Loading time-series database file")
     timeseriesdb = TimeSeriesData(timeseriesdata_path)
@@ -206,26 +304,23 @@ def run_cluster(timeseriesdata_path, num_cores, distance_measure = "sts",
     if nrows <= 1:
         raise ValueError("Time-series matrix contains no information. " \
                          "Was all of your data filtered out?")
-    #Normalize the matrix for sequence depth then into Z-scores
-    print("Normalizing matrix")
-    matrix = matrix / matrix.sum(0)
-    #Normalizing is an issue if you have a column that was completely filtered
-    #Set these columns back to 0
-    matrix[np.invert(np.isfinite(matrix))] = 0
-    #Standardize to Z-scores
-    norm_matrix = matrix
-    for mask_val in np.unique(mask):
-        y = norm_matrix[:, np.where(mask == mask_val)[0]]
-        y = np.apply_along_axis(zscore, 1, y)
-        norm_matrix[:, np.where(mask == mask_val)[0]] = y
-        del y
+    if clr:
+        # Normalize using the centred log ratio after zero imputation with
+        # count zero multiplicative (CZM) method
+        normal_matrix = normalize_clr(matrix)
+    else:
+        #Normalize the matrix for sequence depth then into Z-scores
+        print("Normalizing samples by simple division")
+        normal_matrix = normalize_simple(matrix, mask)
+    
     if (distance_measure == "sts"):
         print("Calculating slopes")
-        slope_matrix = calculate_slopes(norm_matrix, time_points, mask)
+        slope_matrix = calculate_slopes(normal_matrix, time_points, mask)
         print("Generating STS distance matrix")
         sts_dist_matrix = generate_STS_distance_matrix(slope_matrix, num_cores)
         del slope_matrix
-        del norm_matrix
+        del normal_matrix
+    
     max_nclusters = 0    
     max_eps = 0
     prev_nclusters = 0
@@ -239,7 +334,9 @@ def run_cluster(timeseriesdata_path, num_cores, distance_measure = "sts",
         if (distance_measure == "sts"):
             cluster_labels = cluster_dbscan(sts_dist_matrix, "sts", eps)
         else:
-            cluster_labels = cluster_dbscan(norm_matrix, distance_measure, eps)
+            cluster_labels = cluster_dbscan(normal_matrix, 
+                                            distance_measure, 
+                                            eps)
         nclusters = len(list(np.unique(cluster_labels)))
         cluster_label_matrix[:, ind] = cluster_labels
         if nclusters > 1:
