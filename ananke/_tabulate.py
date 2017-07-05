@@ -11,6 +11,7 @@ import hashlib
 import pandas as pd
 import numpy as np
 from collections import defaultdict
+from scipy.sparse import csr_matrix
 
 from ._database import TimeSeriesData
 
@@ -208,6 +209,11 @@ def write_csr(timeseriesdb, seqcount, outseqf, sample_name_array):
 
     return unique_indices
 
+def hash_sequence(sequence):
+    md5hash = hashlib.md5()
+    md5hash.update(sequence.encode())
+    return md5hash.hexdigest()
+
 
 def fasta_to_ananke(sequence_path, metadata_path, time_name, \
               timeseriesdata_path, outseq_path, time_mask=None, \
@@ -272,3 +278,100 @@ def fasta_to_ananke(sequence_path, metadata_path, time_name, \
           "from the metadata file. You will want to run `ananke filter` to " \
           "remove empty samples."
           % (nsamples - len(unique_indices),))
+
+def dada2_to_ananke(table_path, metadata_path, time_name, timeseriesdata_path,
+                    outseq_path, time_mask=None):
+    """Converts a DADA2 table from dada2::makeSequenceTable to an Ananke HDF5
+    file. Table must have sequences as rows, samples/time-points as columns
+    (i.e., output from DADA2 should be transposed). Should be exported using
+    `write.table(t(seqtab), table_path)` from R.
+
+    Parameters
+    ----------
+    table_path: str
+        Path to the csv table output from DADA2.
+    metadata_path: str
+        Path to the tab-separated metadata file.
+    time_name: str
+        Name of the column that contains the time points as integers, offset
+        from zero.
+    timerseriesdata_path: str
+        Path to the new output Ananke HDF5 file.
+    outseq_path: str
+        Path to the new output unique sequence FASTA file.
+    time_mask: str (optional)
+        Name of the column that contains the time-series masking information.
+    """
+    # Grab the metadata from the file
+    metadata_mapping = read_metadata(metadata_path, time_name, time_mask)
+    if time_mask is not None:
+        metadata_mapping = metadata_mapping.sort_values([time_mask, 
+                                                         time_name])
+    else:
+        metadata_mapping = metadata_mapping.sort_values([time_name])
+
+    # Now open the sequence file
+    # Input format assumptions:
+        #- sequences and headers take 1 line each (i.e., not wrapped FASTA)
+        #- no blank lines
+
+    # Open files for reading and writing
+    outseqf = open(outseq_path, 'w')
+    timeseriesdb = TimeSeriesData(timeseriesdata_path)
+
+    # Open table file, read it with pandas
+    seqtab = pd.read_csv(table_path, sep=" ")
+
+    print("Writing table to file")
+
+    # Get the shape of the data
+    sample_name_array = np.array(metadata_mapping["#SampleID"])
+    ngenes = seqtab.shape[0]
+    nsamples = len(sample_name_array)
+
+    # Pare down the sequence tab to include only the necessary samples
+    # sorted in order of mask then time points
+    seqtab = seqtab.loc[:, sample_name_array]
+    # Sparse-ify it
+    csr_seqtab = csr_matrix(seqtab)
+
+    nobs = csr_seqtab.nnz
+
+    # Resize the Ananke TimeSeriesData object
+    timeseriesdb.resize_data(ngenes, nsamples, nobs)
+    timeseriesdb.insert_array_by_chunks("samples/names", sample_name_array)
+    timeseriesdb.insert_array_by_chunks("samples/time",
+                                        metadata_mapping[time_name],
+                                        transform_func = float)
+
+    if time_mask is not None:
+        timeseriesdb.insert_array_by_chunks("samples/mask",
+                                            metadata_mapping[time_mask])
+    else:
+        #Set a dummy mask
+        timeseriesdb.insert_array_by_chunks("samples/mask",
+                                            [1]*len(sample_name_array))
+
+    seqhashes = [ hash_sequence(x) for x in seqtab.index ]
+
+    # Export sequences to FASTA
+    for i in range(0, ngenes):
+        total = seqtab.iloc[i].sum()
+        if total > 0:
+            seqhash = seqhashes[i]
+            outseqf.write(">%s;size=%d\n" % (seqhash, total))
+            outseqf.write(seqtab.index[i].strip() + "\n")
+    
+    timeseriesdb.insert_array_by_chunks("genes/sequenceids", seqhashes)
+
+    timeseriesdb.insert_array_by_chunks("timeseries/data",
+                                        csr_seqtab.data,
+                                        int)
+    timeseriesdb.insert_array_by_chunks("timeseries/indptr",
+                                        csr_seqtab.indptr,
+                                        int)
+    timeseriesdb.insert_array_by_chunks("timeseries/indices",
+                                        csr_seqtab.indices,
+                                        int)
+
+    print("Done writing to %s" % timeseriesdata_path)

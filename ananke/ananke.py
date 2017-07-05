@@ -4,7 +4,7 @@
 
 import argparse
 
-from ._tabulate import fasta_to_ananke
+from ._tabulate import fasta_to_ananke, dada2_to_ananke
 from ._cluster import run_cluster
 from ._database import TimeSeriesData
 from .ananke_simulate import create_simulation_data, score_simulation
@@ -26,7 +26,30 @@ def main():
     tabulate_parser.add_argument("--multi", help="Indicates the input data contains multiple time-series, requires column name of time-series mask variable", type=str, required=False)
     tabulate_parser.add_argument("--size_labels", help="Toggle if the number of occurrences of each sequence is in the FASTA label (in the format: '>SampleXYZ_50;size=100')", action="store_true")
 
-    
+    dada2_parser = subparsers.add_parser("import_from_dada2")
+    dada2_parser.add_argument("-i", metavar="input", 
+                              help="Input DADA2 table that has sequences as \
+                                   rows and samples as columns",
+                              required=True, type=str)
+    dada2_parser.add_argument("-m", metavar="mapping",
+                              help="Metadata mapping file",
+                              required=True, type=str)
+    dada2_parser.add_argument("-o", metavar="output",
+                              help="Output HDF5 data file",
+                              required=True, type=str)
+    dada2_parser.add_argument("-f", metavar="fasta",
+                              help="Output FASTA file",
+                              required=True, type=str)
+    dada2_parser.add_argument("-t", metavar="time_label",
+                              help="Column name for time points in metadata \
+                                    file",
+                              required=True, type=str)
+    dada2_parser.add_argument("--multi", help="Indicates the input data \
+                                               contains multiple time-series, \
+                                               requires column name of \
+                                               time-series mask variable",
+                              required=False, type=str)
+
     #  Filter script options
     filter_parser = subparsers.add_parser("filter")
     filter_parser.add_argument("-i", 
@@ -88,6 +111,8 @@ def main():
     #Route to the proper routines
     if args.subparser_name == "tabulate":
         fasta_to_ananke(args.i, args.m, args.t, args.o, args.f, args.multi, args.size_labels)
+    elif args.subparser_name == "import_from_dada2":
+        dada2_to_ananke(args.i, args.m, args.t, args.o, args.f, args.multi)
     elif args.subparser_name == "filter":
         timeseriesdb = TimeSeriesData(args.i)
         timeseriesdb.filter_data(args.o, args.f, args.t)

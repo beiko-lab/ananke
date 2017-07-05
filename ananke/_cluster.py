@@ -266,7 +266,7 @@ def normalize_clr(matrix, delta = 0.65, threshold = 0.5):
 
 #  Main method
 def run_cluster(timeseriesdata_path, num_cores, distance_measure = "sts",
-                param_min = 0.01, param_max = 1000, param_step = 0.01,
+                param_min = 0.01, param_max = 1, param_step = 0.01,
                 clr = False):
     """For a given Ananke data file, clusters using DBSCAN using the pairwise
     distance measure distance_measure (default short time-series, "sts").
@@ -318,6 +318,8 @@ def run_cluster(timeseriesdata_path, num_cores, distance_measure = "sts",
         slope_matrix = calculate_slopes(normal_matrix, time_points, mask)
         print("Generating STS distance matrix")
         sts_dist_matrix = generate_STS_distance_matrix(slope_matrix, num_cores)
+        max_dist = sts_dist_matrix.max()
+        sts_dist_matrix /= max_dist
         del slope_matrix
         del normal_matrix
     
