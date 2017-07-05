@@ -1,0 +1,9 @@
+#SampleID	time_points	time_mask	other_thing	extraneous_category
+15	12	0	x	14
+72c	0	0	y	19
+qpa	10	0	z	27
+29	4	0	NA	57
+15b	12	1	x	14
+72cb	0	1	y	19
+qpab	10	1	z	27
+29b	4	1	NA	57

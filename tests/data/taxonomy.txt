@@ -1,0 +1,4 @@
+8829fefe91ead511a30df118060b1030	k__Bacteria; p__Actinobacteria; c__Actinobacteria; o__Actinomycetales; f__Streptomycetaceae; g__Streptomyces; s__mirabilis
+9247ec5fd33e99387d41e8fc0d7ee278	k__Bacteria; p__Firmicutes; c__Erysipelotrichi; o__Erysipelotrichales; f__Erysipelotrichaceae; g__[Eubacterium]; s__dolichum
+53f74905f7826fee79dd09b0c12caddf	k__Bacteria; p__Bacteroidetes; c__Sphingobacteriia; o__Sphingobacteriales; f__; g__; s__
+7f97b4991342bf629966aeac0708c94f	k__Bacteria; p__Verrucomicrobia; c__[Pedosphaerae]; o__Arctic97B-4; f__; g__; s__
