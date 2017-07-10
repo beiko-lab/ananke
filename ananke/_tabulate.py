@@ -72,8 +72,9 @@ def tabulate(seqf, metadata_mapping, size_labels):
     metadata_mapping: pandas.DataFrame
         metadata table contained in Pandas DataFrame
     size_labels: boolean
-        true if FASTA file is already compressed to unique sequences (and contains USEARCH-style size
-        annotations in the label, i.e., >SEQUENCEID;size=####
+        true if FASTA file is already compressed to unique sequences (and 
+        contains USEARCH-style size annotations in the label, i.e., 
+        >SEQUENCEID;size=####;
 
     Returns
     -------
@@ -359,7 +360,7 @@ def dada2_to_ananke(table_path, metadata_path, time_name, timeseriesdata_path,
         total = seqtab.iloc[i].sum()
         if total > 0:
             seqhash = seqhashes[i]
-            outseqf.write(">%s;size=%d\n" % (seqhash, total))
+            outseqf.write(">%s;size=%d;\n" % (seqhash, total))
             outseqf.write(seqtab.index[i].strip() + "\n")
     
     timeseriesdb.insert_array_by_chunks("genes/sequenceids", seqhashes)
