@@ -19,6 +19,8 @@ To install locally (to your user directory, or in a Conda environment, once it i
 ```
 python setup.py install --user
 ```
+## Tutorials
+Visit the Wiki for tutorials and examples: https://github.com/beiko-lab/ananke/wiki
 
 ## Running ananke
 ### Required input data
