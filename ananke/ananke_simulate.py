@@ -76,32 +76,40 @@ def create_simulation_data(h5_file, ntimepoints, nreps):
     dense_matrix[nreps:2*nreps,:] = generate_rise(ntimepoints, nreps)
     dense_matrix[2*nreps:3*nreps,:] = generate_normal(ntimepoints, nreps)
     dense_matrix[3*nreps:4*nreps,:] = generate_noisy(ntimepoints, nreps)
-    dense_matrix[4*nreps:5*nreps,:] = generate_conditionally_rare(ntimepoints, nreps)
+    dense_matrix[4*nreps:5*nreps,:] = generate_conditionally_rare(ntimepoints,
+                                                                  nreps)
     dense_matrix[5*nreps:6*nreps,:] = generate_seasonal(ntimepoints, nreps)
     print("Sparsifying matrix")
     sparse_matrix = csr_matrix(dense_matrix)
-    print(sparse_matrix)
     nobs = len(sparse_matrix.data)
     print("Inserting data")
     tsdatabase.resize_data(6*nreps, ntimepoints, nobs)
-    tsdatabase.insert_array_by_chunks('timeseries/data', sparse_matrix.data)
-    tsdatabase.insert_array_by_chunks('timeseries/indptr', sparse_matrix.indptr)
-    tsdatabase.insert_array_by_chunks('timeseries/indices', sparse_matrix.indices)
+    tsdatabase.insert_array_by_chunks('timeseries/data', 
+                                      sparse_matrix.data, 
+                                      transform_func=int)
+    tsdatabase.insert_array_by_chunks('timeseries/indptr', 
+                                      sparse_matrix.indptr,
+                                      transform_func=int)
+    tsdatabase.insert_array_by_chunks('timeseries/indices', 
+                                      sparse_matrix.indices,
+                                      transform_func=int)
     tsdatabase.insert_array_by_chunks('genes/sequenceids', range(6*nreps))
-    tsdatabase.insert_array_by_chunks('samples/time', range(ntimepoints))
+    tsdatabase.insert_array_by_chunks('samples/time', 
+                                      range(ntimepoints),
+                                      transform_func=int)
     print("Done!")
 
 def score_simulation(h5_file):
     print("Opening/creating database file")
     tsdatabase = TimeSeriesData(h5_file)
-    nreps = (tsdatabase.h5_table["timeseries/indptr"].shape[0]-1)/6
+    nreps = int((tsdatabase.h5_table["timeseries/indptr"].shape[0]-1)/6)
     #Items belonging in the same cluster are next to one another
     true_labels = [0]*nreps+[1]*nreps+[2]*nreps+[3]*nreps+[4]*nreps+[5]*nreps
     #Order is: drop, rise, normal, noisy, conditionally rare, seasonal
-    max_nmi = 0
+    max_ami = 0
     for i in range(tsdatabase.h5_table["genes/clusters"].shape[1]):
         pred_labels = tsdatabase.get_cluster_labels(i)
-        nmi = metrics.adjusted_mutual_info_score(true_labels, pred_labels)
-        if (nmi > max_nmi):
-            max_nmi = nmi
-    print("Maximum NMI of clusters is: %f" % (max_nmi,))
+        ami = metrics.adjusted_mutual_info_score(true_labels, pred_labels)
+        if (ami > max_ami):
+            max_ami = ami
+    print("Maximum AMI of clusters is: %f" % (max_ami,))

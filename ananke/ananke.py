@@ -129,7 +129,7 @@ def main():
     elif args.subparser_name == "simulation":
         create_simulation_data(args.d, args.t, args.r)
     elif args.subparser_name == "score_simulation":
-        score_simulation(args.id)
+        score_simulation(args.d)
     elif args.subparser_name == "info":
         timeseriesdb = TimeSeriesData(args.i)
         print_database_info(timeseriesdb)
