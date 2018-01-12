@@ -376,3 +376,78 @@ def dada2_to_ananke(table_path, metadata_path, time_name, timeseriesdata_path,
                                         int)
 
     print("Done writing to %s" % timeseriesdata_path)
+
+def csv_to_ananke(csv_path, metadata_path, time_name, timeseriesdata_path,
+                  time_mask=None):
+    """Imports a CSV file and metadata file into an Ananke HDF5 file.
+    The CSV file must have the time-series as rows and the samples/
+    time points as columns. The first line must be a header that contains
+    the sample names.
+
+    Parameters
+    ----------
+    csv_path: Location of the 
+    metadata_path: Location of the metadata mapping file.
+    time_name: Column name containing the time points in the metadata file.
+    timeseriesdata_path: Output Ananke .h5 file path.
+    time_mask: Column name containing the time mask indicator in the metadata
+               file.
+    """
+    # Pull in the metadata reading
+    metadata_mapping = read_metadata(metadata_path, time_name, time_mask)
+    if time_mask is not None:
+        metadata_mapping = metadata_mapping.sort_values([time_mask,
+                                                         time_name])   
+    else:                                                                       
+        metadata_mapping = metadata_mapping.sort_values([time_name])
+
+    csv_table = pd.read_csv(csv_path, header=0, 
+                            index_col=0, sep="\t")
+
+    # Construct the Ananke object
+    timeseriesdb = TimeSeriesData(timeseriesdata_path)
+    # Sort columns by time point
+
+    sample_name_array = np.array(metadata_mapping["#SampleID"])
+    ngenes = csv_table.shape[0]
+    nsamples = len(sample_name_array)
+
+    # Pare down the sequence tab to include only the necessary samples
+    # sorted in order of mask then time points
+    csv_table = csv_table.loc[:, sample_name_array]
+
+    #Get row (i.e., time series) names
+    seqids = csv_table.index
+
+    #Convert the table to a sparse matrix for storage in CSR format
+    csr_mat = csr_matrix(csv_table.to_sparse().to_coo())
+
+    nobs = csr_mat.nnz
+
+    timeseriesdb.resize_data(ngenes, nsamples, nobs)
+    timeseriesdb.insert_array_by_chunks("samples/names", sample_name_array)
+    timeseriesdb.insert_array_by_chunks("samples/time",
+                                        metadata_mapping[time_name],
+                                        transform_func = float)
+
+    if time_mask is not None:
+        timeseriesdb.insert_array_by_chunks("samples/mask",
+                                            metadata_mapping[time_mask])
+    else:
+        #Set a dummy mask
+        timeseriesdb.insert_array_by_chunks("samples/mask",
+                                            [1]*len(sample_name_array))
+
+    timeseriesdb.insert_array_by_chunks("genes/sequenceids", seqids)
+
+    timeseriesdb.insert_array_by_chunks("timeseries/data",
+                                        csr_mat.data,
+                                        int)
+    timeseriesdb.insert_array_by_chunks("timeseries/indptr",
+                                        csr_mat.indptr,
+                                        int) 
+    timeseriesdb.insert_array_by_chunks("timeseries/indices",
+                                        csr_mat.indices,
+                                        int)
+
+    print("Done writing to %s" % timeseriesdata_path)

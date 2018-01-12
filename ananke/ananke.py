@@ -4,7 +4,7 @@
 
 import argparse
 
-from ._tabulate import fasta_to_ananke, dada2_to_ananke
+from ._tabulate import fasta_to_ananke, dada2_to_ananke, csv_to_ananke
 from ._cluster import run_cluster
 from ._database import TimeSeriesData
 from .ananke_simulate import create_simulation_data, score_simulation
@@ -14,18 +14,43 @@ from .ananke_misc import translate_otus, rarefy_even
 def main():
     #  Argument parsing
     parser = argparse.ArgumentParser(prog='main')
-    subparsers = parser.add_subparsers(title='subcommands',description='the following subcommands are possible: tabulate, filter, cluster, add', dest='subparser_name')
+    subparsers = parser.add_subparsers(title='subcommands',
+                                       description='the following subcommands \
+                                    are possible: tabulate, filter, cluster, \
+                                    add, import_from_dada2, import_from_csv', 
+                                    dest='subparser_name')
     
     #  Tabulate script options
     tabulate_parser = subparsers.add_parser("tabulate")
-    tabulate_parser.add_argument("-i", metavar="input", help="FASTA sequence file", required=True, type=str)
-    tabulate_parser.add_argument("-m", metavar="mapping", help="Metadata mapping file", required=True, type=str)
-    tabulate_parser.add_argument("-o", metavar="output", help="Output HDF5 data file", required=True, type=str)
-    tabulate_parser.add_argument("-f", metavar="fasta", help="Output FASTA file", required=True, type=str)
-    tabulate_parser.add_argument("-t", metavar="time_label", help="Column name for time points in metadata file", default="time_points", type=str)
-    tabulate_parser.add_argument("--multi", help="Indicates the input data contains multiple time-series, requires column name of time-series mask variable", type=str, required=False)
-    tabulate_parser.add_argument("--size_labels", help="Toggle if the number of occurrences of each sequence is in the FASTA label (in the format: '>SampleXYZ_50;size=100')", action="store_true")
+    tabulate_parser.add_argument("-i", metavar="input",
+                                 help="FASTA sequence file",
+                                 required=True, type=str)
+    tabulate_parser.add_argument("-m", metavar="mapping",
+                                 help="Metadata mapping file",
+                                 required=True, type=str)
+    tabulate_parser.add_argument("-o", metavar="output",
+                                 help="Output HDF5 data file",
+                                 required=True, type=str)
+    tabulate_parser.add_argument("-f", metavar="fasta", 
+                                 help="Output FASTA file", required=True,
+                                 type=str)
+    tabulate_parser.add_argument("-t", metavar="time_label",
+                                 help="Column name for time points in \
+                                       metadata file", default="time_points",
+                                 type=str)
+    tabulate_parser.add_argument("--multi", help="Indicates the input data \
+                                                  contains multiple \
+                                                  time-series, requires \
+                                                  column name of time-series \
+                                                  mask variable", 
+                                 type=str, required=False)
+    tabulate_parser.add_argument("--size_labels", help="Toggle if the number \
+                                 of occurrences of each sequence is in the \
+                                 FASTA label (in the format: \
+                                 '>SampleXYZ_50;size=100')",
+                                 action="store_true")
 
+    #  Import from DADA2 options
     dada2_parser = subparsers.add_parser("import_from_dada2")
     dada2_parser.add_argument("-i", metavar="input", 
                               help="Input DADA2 table that has sequences as \
@@ -42,13 +67,34 @@ def main():
                               required=True, type=str)
     dada2_parser.add_argument("-t", metavar="time_label",
                               help="Column name for time points in metadata \
-                                    file",
-                              required=True, type=str)
+                                    file", required=True, type=str)
     dada2_parser.add_argument("--multi", help="Indicates the input data \
-                                               contains multiple time-series, \
+                                               contains multiple time series, \
                                                requires column name of \
                                                time-series mask variable",
                               required=False, type=str)
+
+    #  Import from CSV options
+    csv_parser = subparsers.add_parser("import_from_csv")
+    csv_parser.add_argument("-i", metavar="input",
+                            help="Input CSV table that has time series as rows\
+                                  and samples/time points as columns.",
+                            required=True, type=str)
+    csv_parser.add_argument("-m", metavar="mapping",
+                            help="Metadata mapping file",
+                            required=True, type=str)
+    csv_parser.add_argument("-o", metavar="output",
+                            help="Output HDF5 data file path",
+                            required=True, type=str)
+    csv_parser.add_argument("-t", metavar="time_label",
+                            help="Column name for time points in metadata \
+                                  file",
+                            required=True, type=str)
+    csv_parser.add_argument("--multi", help="Indicates the input data \
+                                             contains multiple time series, \
+                                             requires column name of \
+                                             time-series mask variable.",
+                            required=False, type=str)
 
     #  Filter script options
     filter_parser = subparsers.add_parser("filter")
@@ -113,6 +159,8 @@ def main():
         fasta_to_ananke(args.i, args.m, args.t, args.o, args.f, args.multi, args.size_labels)
     elif args.subparser_name == "import_from_dada2":
         dada2_to_ananke(args.i, args.m, args.t, args.o, args.f, args.multi)
+    elif args.subparser_name == "import_from_csv":
+        csv_to_ananke(args.i, args.m, args.t, args.o, args.multi)
     elif args.subparser_name == "filter":
         timeseriesdb = TimeSeriesData(args.i)
         timeseriesdb.filter_data(args.o, args.f, args.t)
