@@ -52,6 +52,7 @@ class TimeSeriesData(object):
             # Keeps track of which version created the file
             h5_table.attrs.create("origin_version", str(__version__), 
                                   dtype=h5.special_dtype(vlen=bytes))
+
             # Create genes group
             h5_table.create_group("genes")
             h5_table["genes"].require_dataset("sequences", shape=(1,), 
@@ -62,7 +63,7 @@ class TimeSeriesData(object):
                               maxshape=(None,), exact=False)
             h5_table["genes"].require_dataset("clusters", shape=(1,1), 
                               dtype=h5.special_dtype(vlen=bytes), 
-                              maxshape=(None,None), exact=False)
+                              maxshape=(None,None), exact=False, fillvalue=-2)
             h5_table["genes"].require_dataset("taxonomy", shape=(1,), 
                               dtype=h5.special_dtype(vlen=bytes), 
                               maxshape=(None,), exact=False)
@@ -71,8 +72,8 @@ class TimeSeriesData(object):
                               maxshape=(None,), exact=False)
 
             #Fill some arrays with ghost values so rhdf5 doesn't segfault
-            self.fill_array("genes/taxonomy","None")
-            self.fill_array("genes/sequenceclusters","None")
+            self.fill_array("genes/taxonomy", b"NF")
+            self.fill_array("genes/sequenceclusters", b"NF")
             
             h5_table.create_group("samples")
             h5_table["samples"].require_dataset("names", shape=(1,), 
@@ -289,6 +290,15 @@ class TimeSeriesData(object):
             except KeyError:
                 cluster_list[i] = "NF"
         self.insert_array_by_chunks('genes/sequenceclusters', cluster_list)
+
+    def insert_cluster(self, indices, cluster_num, epsilon):
+        cluster_attrs = self.h5_table["genes/clusters"].attrs
+        p_min = cluster_attrs["param_min"]
+        p_max = cluster_attrs["param_max"]
+        p_step = cluster_attrs["param_step"]
+        p_index = int(round((epsilon - p_min) / p_step))
+        indices = np.sort(np.unique(indices))
+        self.h5_table["genes/clusters"][indices, p_index] = str(cluster_num)
 
     def insert_array_by_chunks(self, target, array, 
                                transform_func = lambda x: str(x).encode(),
