@@ -291,12 +291,16 @@ class TimeSeriesData(object):
                 cluster_list[i] = "NF"
         self.insert_array_by_chunks('genes/sequenceclusters', cluster_list)
 
-    def insert_cluster(self, indices, cluster_num, epsilon):
+    def get_epsilon_index(self, epsilon):
         cluster_attrs = self.h5_table["genes/clusters"].attrs
         p_min = cluster_attrs["param_min"]
         p_max = cluster_attrs["param_max"]
         p_step = cluster_attrs["param_step"]
         p_index = int(round((epsilon - p_min) / p_step))
+        return p_index 
+
+    def insert_cluster(self, indices, cluster_num, epsilon):
+        p_index = self.get_epsilon_index(epsilon)
         indices = np.sort(np.unique(indices))
         self.h5_table["genes/clusters"][indices, p_index] = str(cluster_num)
 
@@ -333,7 +337,7 @@ class TimeSeriesData(object):
                 self.h5_table[target][chunks[i]:chunks[i+1]] = \
                     [ transform_func(x) for x in array[chunks[i]:chunks[i+1]] ]
     
-    def get_array_by_chunks(self, target, chunk_size = 1000):
+    def get_array_by_chunks(self, target, start=None, end=None, chunk_size = 1000):
         """Fetches an array from the HDF5 file in chunk_size chunks. This helps
         prevent memory usage issues with HDF5.
     
@@ -350,9 +354,15 @@ class TimeSeriesData(object):
         arr: list
             the complete array from target location in HDF5 file
         """
-        arr = np.empty(self.h5_table[target].shape,
+        if (start is not None) & (end is not None):
+            arr_size = end - start
+        else:
+            arr_size = self.h5_table[target].shape[0]
+            start = 0
+            end = arr_size + 1
+        arr = np.empty(arr_size,
                        dtype=self.h5_table[target].dtype)
-        chunks = list(range(0, arr.shape[0], chunk_size))
+        chunks = list(range(start, end, chunk_size))
         if chunks[-1] != arr.shape[0]:
             chunks = chunks + [arr.shape[0]]
         for i,j in zip(chunks[0:-1], chunks[1:]):
