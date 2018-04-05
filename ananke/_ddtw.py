@@ -43,5 +43,4 @@ def DDTW(signal_1, signal_2):
             best_idx = np.argmin(temp)
             ddtw[i,j] = diff_dist(signal_1[i-1:i+2], signal_2[j-1:j+2]) + temp[best_idx]
             ddtw_traceback[i,j] = best_idx
-    print(ddtw[-1,-1])
     return ddtw, ddtw_traceback
