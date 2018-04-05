@@ -1,6 +1,6 @@
 import numpy as np
 
-def diff_dict(x,y):
+def diff_dist(x,y):
     '''
     Computing drivative differences between dx and dy
     Arguments:
