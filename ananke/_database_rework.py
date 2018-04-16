@@ -1,6 +1,7 @@
 import h5py as h5
 import numpy as np
 import pandas as pd
+from functools import lru_cache
 
 import arrow
 
@@ -60,7 +61,7 @@ class TimeSeriesData(object):
         self: TimeSeriesData object
         """
         # Create the new file, if required
-        h5t = h5.File(h5_file_path, 'a')
+        h5t = h5.File(h5_file_path)
         self._h5t = h5t
         # Create the required datasets (initialize empty)
         
@@ -84,16 +85,16 @@ class TimeSeriesData(object):
             # Create genes group
             self._h5t.create_group("timeseries")
             #IDs are hash values
-            self._h5t["timeseries"].create_dataset("ids", shape=(1,), 
-                                   dtype=np.int32, 
-                                   maxshape=(None,))
-            self._h5t["timeseries"].create_dataset("clusters", shape=(1,1), 
-                                   dtype=np.int16, 
-                                   maxshape=(None,None), fillvalue=-2)
-            self._h5t["timeseries"].create_dataset("taxonomy", shape=(1,), 
+            self._h5t["timeseries"].create_dataset("ids", shape=(0,), 
                                    dtype=h5.special_dtype(vlen=bytes), 
                                    maxshape=(None,))
-            self._h5t["timeseries"].create_dataset("altclusters", shape=(1,), 
+            self._h5t["timeseries"].create_dataset("clusters", shape=(0,0), 
+                                   dtype=np.int16, 
+                                   maxshape=(None,None), fillvalue=-2)
+            self._h5t["timeseries"].create_dataset("taxonomy", shape=(0,), 
+                                   dtype=h5.special_dtype(vlen=bytes), 
+                                   maxshape=(None,))
+            self._h5t["timeseries"].create_dataset("altclusters", shape=(0,), 
                                    dtype=h5.special_dtype(vlen=bytes),
                                    maxshape=(None,))
 
@@ -123,6 +124,105 @@ class TimeSeriesData(object):
         info += "Num. of Time Series: %d" % (self._h5t["timeseries/ids"].shape[0],)
         return info
 
+    def create_series(self, name, time, sample_names):
+        self._h5t.create_group("data/" + name)
+        self._h5t.create_dataset("data/" + name + "/matrix",
+                                 dtype=np.int32,
+                                 shape=(0,len(time)), 
+                                 maxshape=(None, len(time)),
+                                 compression="gzip",
+                                 fillvalue=0)
+        self._h5t.create_dataset("data/" + name + "/time",
+                                 dtype=h5.special_dtype(vlen=bytes),
+                                 data=[str(x).encode() for x in time])
+        self._h5t.create_dataset("data/" + name + "/names",
+                                 dtype=h5.special_dtype(vlen=bytes),
+                                 data=[str(x).encode() for x in sample_names])
+
+    def register_timeseries(self, names):
+        nts = self._h5t["timeseries/ids"].shape[0]
+        print(self._h5t["timeseries/ids"].shape)
+        self.resize_data(nts + len(names))
+        self._h5t["timeseries/ids"][nts:] = [ x.encode() for x in names ]
+        return nts + len(names)
+
+    @lru_cache(maxsize=256)
+    def get_sample_index(self, name, return_dataset = False):
+        # Get the column index from a sample name
+        for dataset in self._h5t["data"]:
+            names = self._h5t["data/" + dataset + "/names"][:]
+            res = np.where(names == name.encode())
+            if len(res[0]) > 0:
+                if return_dataset:
+                    return (str(dataset), res[0][0])
+                else:
+                    return res[0][0]
+        #If not found, give -1
+        return (None, -1)
+
+    @lru_cache(maxsize=1028)
+    def get_timeseries_index(self, name):
+        res = np.where(self._h5t["timeseries/ids"][:] == name.encode())
+        if len(res[0]) > 0:
+            return res[0][0]
+        else:
+            return -1
+
+    def set_timeseries_data(self, data, series=None, replicate=None, name=None, index=None, action='add'):
+        #Add timeseries to a data set
+        #name is the feature/timeseries name (e.g., hash of the sequence)
+        #index is the index in the timeseries order where the data should be inserted
+        #data is the timeseries data, length of ntimepoints for the target
+        #target is the dataset (series + replicate)
+        #action: add or replace, if timeseries already exists
+        if (series is not None) & (replicate is not None):
+            target = "data/%s_%s/matrix" % (series, replicate)
+        elif (series is not None):
+            target = "data/%s/matrix" % (series,)
+        elif (replicate is not None):
+            target = "data/%s/matrix" % (replicate,)
+        else:
+            target = "data/timeseries/matrix"
+
+        if (len(data) != self._h5t[target].shape[1]):
+            raise ValueError("Input data length %d does not match matrix rows, %d" 
+                              % (len(data), self._h5t[target].shape[1]))
+        if (name is None) and (index is None):
+            raise ValueError("Must supply one of 'name' or 'index' to insert into data matrix.")
+        if index is None:
+            index = self.get_timeseries_index(name)
+        if (index == -1) | (index >= self._h5t["timeseries/ids"].shape[0]):
+            raise ValueError("Time series not in data, must be registered.")
+        if action == 'add':
+            self._h5t[target][index, :] += data
+        elif action == 'replace':
+            self._h5t[target][index, :] = data
+        else:
+            raise ValueError("Unknown action '%s', valid options: add, replace" % (action,))
+
+    # TODO: Update to accept lists of length nseries for timepoints
+    def initialize_by_shape(self, timepoints=np.arange(10), nseries = 1, nreplicates = 1):
+        names = []
+        for i in np.arange(nseries):
+            for j in np.arange(nreplicates):
+                if nseries > 1:
+                    series_name = "timeseries%d" % (i,)
+                    series_rep_name = series_name + "_%d" % (j,)
+                else:
+                    series_name = "timeseries"
+                    series_rep_name = series_name
+                names.append(series_rep_name)
+                self.create_series(series_rep_name, timepoints, 
+                                   [ series_rep_name + "_S%d" % (j,) for j in np.arange(len(timepoints)) ]
+                                  )
+                if nseries > 1:
+                    self._h5t["data/" + series_rep_name].attrs.create("series", series_name.encode(),
+                                                           dtype=h5.special_dtype(vlen=bytes))
+                if nreplicates > 1:
+                    self._h5t["data/" + series_rep_name].attrs.create("replicate", str(j).encode(),
+                                                       dtype=h5.special_dtype(vlen=bytes))
+        return names
+
     def initialize_from_metadata(self, metadata_path, name_col, 
                                  time_col, time_format="X",
                                  replicate_col=None, series_col=None):
@@ -133,7 +233,7 @@ class TimeSeriesData(object):
         ----------
         metadata_path: str
             filepath to metadata file
-        name_col: st
+        name_col: str
             name of column in metadata file that contains the sample names
         time_col: str
             name of column in metadata file that contains time points
@@ -180,24 +280,6 @@ class TimeSeriesData(object):
                       if x is not None]
         mm = mm.sort_values(by=sort_order)
 
-        # Create a time series data set in the H5 file with a given name
-        # and using the time points supplied
-        def create_series(name, time, sample_names):
-            self._ht5.create_group("data/" + name)
-            self._h5t.create_dataset("data/" + name + "/matrix",
-                                     dtype=np.int32,
-                                     shape=(1,len(time)), 
-                                     maxshape=(None, len(time)),
-                                     compression="gzip",
-                                     fillvalue=0)
-            self._h5t.create_dataset("data/" + name + "/time",
-                                     dtype=h5.special_dtype(vlen=bytes),
-                                     data=time)
-            self._h5t.create_dataset("data/" + name + "/names",
-                                     dtype=h5.special_dtype(vlen=bytes),
-                                     data=sample_names)
-
-
         if len(sort_order) == 3:
             #We have the trifecta: replicates, multi timeseries, and the offsets
             for series in mm[series_col].unique():
@@ -207,7 +289,7 @@ class TimeSeriesData(object):
                            series_subset[replicate_col] == replicate, time_col]
                     name = str(series) + "_" + str(replicate)
                     sample_names = series_subset[name_col]
-                    create_series(name, time, sample_names)
+                    self.create_series(name, time, sample_names)
                                              
                     self._h5t["data/" + name].attrs.create("replicate", replicate.encode(),
                                                            dtype=h5.special_dtype(vlen=bytes))
@@ -221,7 +303,7 @@ class TimeSeriesData(object):
                 time = np.array(subset[time_col], dtype=str)
                 name = str(rep_or_series)
                 sample_names = subset[name_col]
-                create_series(name, time, sample_names)
+                self.create_series(name, time, sample_names)
 
                 if replicate_col is not None:
                     att_str = "replicate"
@@ -234,7 +316,7 @@ class TimeSeriesData(object):
             #We only have one to deal with
             time = mm[time_col]
             sample_names = mm[name_col]
-            create_series("timeseries", time, sample_names)
+            self.create_series("timeseries", time, sample_names)
 
 
     def resize_data(self, nts):
@@ -248,11 +330,13 @@ class TimeSeriesData(object):
         nsamples: int (optional)
             number of samples/time-points in the data set
         """
-        for group in self._ht5["data"]:
-            dataset = group["matrix"]
+        for dataset_name in self._h5t["data"]:
+            dataset = self._h5t["data/" + dataset_name + "/matrix"]
             dataset.resize((nts, dataset.shape[1]))
-        for dataset in self._ht5["timeseries"]:
-            dataset.resize((nts,))
+        for dataset_name in self._h5t["timeseries"]:
+            shape = list(self._h5t["timeseries/" + dataset_name].shape)
+            shape[0] = nts
+            self._h5t["timeseries/" + dataset_name].resize(shape)
         
     def add_taxonomy_data(self, input_filename):
         """Takes in a tab-separated file where the first column is the sequence
@@ -388,25 +472,25 @@ class TimeSeriesData(object):
             arr[i:j] = self._h5t[target][i:j]
         return arr
        
-    def filter_data(self, outfile, filter_type='presence', threshold=0.1):
-        """Creates a new HDF5 file containing a subset of the data that match
-        the filter criterion. This is used to reduce large data sets so that
-        fewer time series are included, which can help with computation 
-        efficiency downstream.
-    
-        Parameters:
-        -----------
-        outfile: str
-            location of new HDF5 data file. This will be created.
-        filter_type: str
-            one of "proportion", "abundance", or "presence". This affects the
-            interpretation of the threshold parameter. For "proportion", a 
-            sequence must contain threshold % of the data. For "abundance", a
-            sequence must have been recorded at least threshold times. For 
-            "presence", a sequence must have been present (>0 abundance) in at 
-            least threshold % of time points.
-        threshold: float
-            the cut-off for the filter, the meaning of this changes depending
-            on filter_type.
-        """
-        pass
+#    def filter_data(self, outfile, filter_type='presence', threshold=0.1):
+#        """Creates a new HDF5 file containing a subset of the data that match
+#        the filter criterion. This is used to reduce large data sets so that
+#        fewer time series are included, which can help with computation 
+#        efficiency downstream.
+#    
+#        Parameters:
+#        -----------
+#        outfile: str
+#            location of new HDF5 data file. This will be created.
+#        filter_type: str
+#            one of "proportion", "abundance", or "presence". This affects the
+#            interpretation of the threshold parameter. For "proportion", a 
+#            sequence must contain threshold % of the data. For "abundance", a
+#            sequence must have been recorded at least threshold times. For 
+#            "presence", a sequence must have been present (>0 abundance) in at 
+#            least threshold % of time points.
+#        threshold: float
+#            the cut-off for the filter, the meaning of this changes depending
+#            on filter_type.
+#        """
+#        pass
