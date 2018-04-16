@@ -23,7 +23,7 @@ class OutOfCoreDistances:
        # Create the H5 file with the correct dimensions
         self.h5_file = h5.File(h5_path)
         self.h5_file.create_dataset("distances", (nrows, nrows),
-                                    dtype=np.float32, fillvalue=1.0)
+                                    dtype=np.float16, fillvalue=100)
 
     def set_distance(self, i, j, distance):
        # Insert the distance into the h5 file
@@ -49,7 +49,6 @@ class TimeSeries:
         self.abundance = abundance
         self.data = ts_data
         self.slopes = (ts_data[1:] - ts_data[0:-1]) / time_point_slopes
-        self.distances = []
         # Set to the noise bin, -1, by default.
         # Overwrite when proven otherwise.
         self.cluster_id = -1
@@ -117,12 +116,85 @@ def compute_distance(time_series1, time_series2,
     return distance
 
 
-def cluster(timeseriesdata_path, min_pts = 2,
-                      distance_measure = 'sts', param_min = 0.01,
-                      param_max = 0.6, param_step = 0.01, n_precompute = 100,
-                      num_threads = 1):
+def sample_distances(timeseries_list, distance_measure):
+    # Sample some distances to guess the max epsilon, used for scaling
+    # In the RAM-hungry version, we know the max up-front and can scale
+    # perfectly, but in this case we have to guess and then check
+    nrows = len(timeseries_list)
+    max_dist = 0
+    # Sample twice as many distances as we have unique genes
+    # TODO: Validate that this is a good enough amount of sampling
+    n_iters = int(2*nrows)
+    for i in range(0, n_iters):
+        x = randrange(0, nrows, 1)
+        y = randrange(0, nrows, 1)
+        ts1 = timeseries_list[x]
+        ts2 = timeseries_list[y]
+        distance = compute_distance(ts1, ts2, 
+                                    distance_measure = distance_measure)
+        if distance > max_dist:
+            max_dist = distance
 
-    ######## Setup ########
+    print("After %d samples of the distances, the max distance was %f" \
+          % (n_iters, max_dist))
+
+    return max_dist
+
+# Cluster around a given seed, finding its neighbours, its neighbours neighbours,
+# and so on, until no more new neighbours are found. This is the core clustering
+# function, and is a re-organization of the DBSCAN algorithm intended to be
+# more memory efficient
+def cluster_around_seed(ts_seed, timeseries_list, timeseriesdb, 
+                        epsilon, distance_measure, 
+                        min_pts, cluster_id, num_threads):
+    cluster_attrs = timeseriesdb.h5_table["genes/clusters"].attrs
+    max_dist = cluster_attrs["epsilon_factor"]
+
+    # Store found neighbours within epsilon
+    queue = set() 
+    # Initialize the neighbour compute queue with the abundant seed 
+    queue.add(ts_seed)
+
+    n_neighbours = 0
+
+    # Grab a pool of threads
+    p = Pool(num_threads)
+
+    while queue:
+        ts1 = queue.pop()
+        neighbourhood = []
+        if ts1.visited:
+            continue
+        else:
+            ts1.visited = True
+        # If a time series has been "visited", that means it has been
+        # checked against all other time series, and since the distances
+        # are symmetric, we can exclude them here to avoid double computing
+        timeseries_subset = [x for x in timeseries_list if not x.visited]
+        p_distance_func = partial(compute_distance, 
+                                  time_series2 = ts1, 
+                                  distance_measure = distance_measure)
+        results = p.map(p_distance_func, timeseries_subset)
+        for ts2, distance in zip(timeseries_subset, results):
+            distance = distance / max_dist
+            if distance <= epsilon:
+                neighbourhood.append(ts2)
+        if len(neighbourhood) >= min_pts:
+            for neighbour in neighbourhood:
+                if (not neighbour.visited) & (neighbour not in queue):
+                    queue.add(neighbour)
+                    n_neighbours += 1
+                    neighbour.cluster_id = cluster_id
+                    neighbour.queued = True
+                
+        # Update status and reset appropriate counters
+        print("Found %d neighbours" %
+              (n_neighbours, ), end='\r')
+    indices = [x.original_index for x in [ts1] + neighbourhood]
+    # Cluster is done, so write to the file
+    timeseriesdb.insert_cluster(indices, cluster_id, epsilon)
+
+def load_data(timeseriesdata_path):
     print("Loading time-series database file")
     timeseriesdb = TimeSeriesData(timeseriesdata_path)
 
@@ -131,7 +203,6 @@ def cluster(timeseriesdata_path, min_pts = 2,
     time_points = timeseriesdb.get_array_by_chunks("samples/time")
     time_point_slopes = time_points[1:] - time_points[0:-1]
     names = timeseriesdb.get_array_by_chunks("genes/sequenceids")
-    # TODO Mask needs to be reworked to be unnecessary
     mask = timeseriesdb.get_mask()
     nrows = matrix.shape[0]
     abundances = matrix.sum(1)
@@ -141,6 +212,21 @@ def cluster(timeseriesdata_path, min_pts = 2,
     if nrows <= 1:
         raise ValueError("Time-series matrix contains no information. " \
                          "Was all of your data filtered out?")
+
+    return timeseriesdb, matrix, nrows, abundances, time_point_slopes
+
+
+   
+
+def auto_cluster(timeseriesdata_path, min_pts = 2,
+                      distance_measure = 'sts', param_min = 0.01,
+                      param_max = 0.6, param_step = 0.01, n_precompute = 100,
+                      num_threads = 1, store_ooc = False):
+
+    ######## Setup ########
+    timeseriesdb, matrix, nrows, 
+    abundances, time_point_slopes = load_data(timeseriesdata_path)
+
 
     print("Initializing TimeSeries objects")
     # Start with largest epsilon and decrease
@@ -171,30 +257,12 @@ def cluster(timeseriesdata_path, min_pts = 2,
 
     #ooc_distances = OutOfCoreDistances("ananke_distances.h5", nrows)
 
-    # Sample some distances to guess the max epsilon, used for scaling
-    # In the RAM-hungry version, we know the max up-front and can scale
-    # perfectly, but in this case we have to guess and then check
-    n_dists_ignored = 0
-    n_dists = 0
-    total_n = nrows*(nrows-1)/2
-    max_dist = 0
-    sample_prop = 2
-    n_iters = int(sample_prop*nrows)
-    n_core = 0
-    for i in range(0, n_iters):
-        x = randrange(0, nrows, 1)
-        y = randrange(0, nrows, 1)
-        ts1 = timeseries_list[x]
-        ts2 = timeseries_list[y]
-        distance = compute_distance(ts1, ts2, 
-                                    distance_measure = distance_measure)
-        if distance > max_dist:
-            max_dist = distance
+    max_dist = sample_distances(timeseries_list, distance_measure)
 
-    print("After %d samples of the distances, the max distance was %f" \
-          % (n_iters, max_dist))
-
-    true_max_dist = max_dist
+    # Store the max_dist as epsilon_factor, because this is an estimate
+    # and affects the scaling of epsilon to a domain of [0,1] and therefore
+    # affects clustering consistency, so if we need to pick clustering back up
+    # we must store this value to re-normalize against
     cluster_attrs = timeseriesdb.h5_table["genes/clusters"].attrs
     cluster_attrs.create("epsilon_factor", max_dist)
     cluster_attrs.create("param_min", param_min)
@@ -210,65 +278,17 @@ def cluster(timeseriesdata_path, min_pts = 2,
     # Take the top n_precompute most abundant sequences
     abundant_sequences = timeseries_list[-n_precompute:]
 
-    # Grab a pool of threads
-    p = Pool(num_threads)
-
     # While there are unclustered sequences in our list
     while abundant_sequences:
-        queue = set()
-        n_clusts += 1
-        print("\nComputing cluster #%s" % (n_clusts,))
         ts = abundant_sequences.pop()
         try:
             while ts.visited:
                 ts = abundant_sequences.pop()
         except IndexError:
-                break
-       
-        # Initialize the neighbour compute queue with the abundant seed 
-        queue.add(ts)
-
-        n_neighbours = 0
-
-        while queue:
-            ts1 = queue.pop()
-            neighbourhood = []
-            if ts1.visited:
-                continue
-            else:
-                ts1.visited = True
-            # If a time series has been "visited", that means it has been
-            # checked against all other time series, and since the distances
-            # are symmetric, we can exclude them here to avoid double computing
-            timeseries_subset = [x for x in timeseries_list if not x.visited]
-            p_distance_func = partial(compute_distance, 
-                                      time_series2 = ts1, 
-                                      distance_measure = distance_measure)
-            results = p.map(p_distance_func, timeseries_list)
-            for ts2, distance in zip(timeseries_list, results):
-                distance = distance / max_dist
-                if distance <= epsilon:
-                    neighbourhood.append(ts2)
- 
-            if len(neighbourhood) >= min_pts:
-                for neighbour in neighbourhood:
-                    if (not neighbour.visited) & (neighbour not in queue):
-                        queue.add(neighbour)
-                        n_neighbours += 1
-                        neighbour.cluster_id = n_clusts
-                        neighbour.queued = True
-                    
-            n_processed += 1
-
-            # Update status and reset appropriate counters
-            print("Found %d neighbours, " \
-                  "fully processed %d time-series" %
-                  (n_neighbours, n_processed), end='\r')
-        n_neighbours = 0
-        indices = [x.original_index for x in [ts1] + neighbourhood]
-        # Cluster is done, so write to the file
-#        for neighbour in [ts1] + neighbourhood:
-#            indices.append(neighbour.original_index)
-        timeseriesdb.insert_cluster(indices, n_clusts, epsilon)
-
+            break
+        n_clusts += 1
+        print("\nComputing cluster #%s" % (n_clusts,))
+        cluster_around_seed(ts, timeseries_list, timeseriesdb,
+                            epsilon, distance_measure,
+                            min_pts, n_clusts, num_threads)
     print("\nPre-computation of most abundant sequences complete")

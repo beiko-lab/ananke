@@ -4,10 +4,13 @@ from scipy.spatial.distance import squareform
 import time
 import matplotlib
 import matplotlib.pyplot as plt
-data = arima_seed_signal_generation(10, 100, 0, 6)
-data = np.apply_along_axis(nbinom_rand, -1, data)
-data = generate_signal(data, 50, 5, 0, 1, 0, 1)
-X = data
+sim = gen_table(fl_sig=0,w_sig=6,
+              fl_bg=-6,w_bg=6,
+              bg_disp_mu=0,bg_disp_sigma=1,
+              sig_disp_mu2=0,sig_disp_sigma2=1,
+              n_clust=10,n_sig=10,n_tax_sig=1,n_bg=10,
+              len_arima=100,len_ts=50,len_signal=30)
+X = sim['signals']
 print('generating distance matrix')
 start = time.time()
 d = np.zeros(int(X.shape[0]*(X.shape[0]-1)/2))
