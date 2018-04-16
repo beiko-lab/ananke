@@ -7,17 +7,14 @@ an Ananke HDF5 file.
 import sys
 import warnings
 import hashlib
+from functools import lru_cache
 
 import pandas as pd
 import numpy as np
-from collections import defaultdict
-from scipy.sparse import csr_matrix
-from pybloom import ScalableBloomFilter
+from collections import Counter
 import arrow
 
 from ._database_rework import TimeSeriesData
-
-#  TODO: - Add an observer to the timeseriesdb class for progress
 
 class CountAccumulator(object):
     """Class that holds counts for arbitrary datasets until a certain number
@@ -25,240 +22,154 @@ class CountAccumulator(object):
        HDF5 file. Allows the HDF5 file to be incrementally built up. Will add
        counts to an existing file if initialized using a file with data."""
 
-    def __init__(self, timeseriesdb, max_records = 1e5):
+    def __init__(self, timeseriesdb, push_at = 5e6,
+                 item_hash = lambda x: hashlib.md5(x).hexdigest()):
         self.db = timeseriesdb
-        self.limit = max_records
+        self.id_indexes = dict(zip(timeseriesdb._h5t["timeseries/ids"][:], 
+                               np.arange(0, timeseriesdb._h5t["timeseries/ids"].shape[0])))
+        self.limit = push_at
+        # Holds the counts in a dictionary in {"dataset_name": { column_index: Counter((hash, count)) }} format
         self.counts = {}
+        # Holds the sequence hashes (in order)
         self.pending_ids = []
-        self.bloomfilter = ScalableBloomFilter()
+        self.pending_rows = []
+        self.pending_columns = []
+        self.pending_counts = []
+        # Count records
+        self.count_total = 0
+        # This hash is how we will store the IDs
+        self.item_hash = item_hash
+        # Set a warnings filter for the count function
+        warnings.simplefilter("once")
 
-#Functions needed:
-# add(object)  adds an object to the bloom filter
-# push()       pushes accumulated counts to the HDF5 file
-# 
+    @lru_cache(maxsize=100)
+    def find_id(self, Id, full_check = True):
+        if full_check:
+            res = np.where(self.id_indexes.keys() == Id)
+            if len(res[0]) >= 1:
+                return res[0][0]
+        try:
+            idx = self.pending_ids.index(Id)
+            return len(self.id_indexes.keys()) + idx
+        except:
+            return -1
 
-# Algorithm: if sequence not in BloomFilter, it is definitely new, so add a new id
-# to the pending_ids
+    # Adds an item to the bloom filter, increments the value
+    def count(self, item, sample_name, increment = 1):
+        ih = self.item_hash(item.encode())
+        ih = str(ih).encode()
+        dataset_name, column_index = self.db.get_sample_index(sample_name, return_dataset=True)
+        if column_index == -1:
+            warnings.warn("Sample %s not found in any data set. Skipping all entries from this sample." % (sample_name,))
+            return
+        if dataset_name not in self.counts:
+            self.counts[dataset_name] = {}
+        if column_index not in self.counts[dataset_name]:
+            self.counts[dataset_name][column_index] = Counter()
+        self.counts[dataset_name][column_index][ih] += increment
+        self.count_total += increment
+        if self.count_total >= self.limit:
+            self.push()
+            self.count_total = 0
+        
+    # Writes the accumulated counts 
+    def push(self, chunksize = 10):
+        print("Pushing 100k sequences")
+        #row_chunk = []
+        #count_chunk = []
+        for dataset_name, columns in self.counts.items():
+            dataset = self.db._h5t["data/" + dataset_name + "/matrix"]
+            for column_index, counter in columns.items():
+                print("Sorting hashes")
+                for item_hash, count in counter.items():
+                    try:
+                        row_index = self.id_indexes[item_hash]
+                    except KeyError:
+                        row_index = -1
+                    if row_index == -1:
+                        row_index = len(self.id_indexes.keys()) + len(self.pending_ids)
+                        self.pending_ids.append(item_hash)
+                        self.id_indexes.update([(item_hash, row_index)])
+                    if row_index < dataset.shape[0]:
+                        #row_chunk.append(row_index)
+                        #count_chunk.append(count_chunk)
+                        #if len(row_chunk) >= chunksize:
+                            #r_s, n_s = map(list, zip(*sorted(zip(row_chunk, count_chunk))))
+                        dataset[row_index, column_index] = count
+                            #row_chunk = []
+                            #count_chunk = []
+                    else:
+                        self.pending_rows.append(row_index)
+                        self.pending_columns.append(column_index)
+                        self.pending_counts.append(count)
+                #if len(row_chunk) > 0:
+                #    r_s, n_s = map(list, zip(*sorted(zip(row_chunk, count_chunk))))
+                #    dataset[r_s, column_index] = n_s
+                #    row_chunk = []
+                #    count_chunk = []
+            print("Resizing data for new features")
+            self.db.resize_data(len(self.id_indexes.keys()) + len(self.pending_ids))
+            print("Inserting pending feature IDs")
+            self.db._h5t["timeseries/ids"][len(self.id_indexes.keys()):] = self.pending_ids
+            self.id_indexes.update(zip(self.pending_ids, self.pending_rows))
+            if len(self.pending_rows) > 0:
+                print("Inserting feature counts")
+                r_s, c_s, n_s = map(list, zip(*sorted(zip(self.pending_rows,
+                                                          self.pending_columns,
+                                                          self.pending_counts))))
+                print("Sorted")
+                r_s = np.array(r_s)
+                c_s = np.array(c_s)
+                n_s = np.array(n_s)
+                for value in np.unique(c_s):
+                    print("Inserting a column")
+                    rows = r_s[np.where(c_s == value)]
+                    counts = n_s[np.where(c_s == value)]
+                    N = max(round(len(rows) / chunksize), 1)
+                    row_chunks = np.array_split(rows, N)
+                    count_chunks = np.array_split(counts, N)
+                    for row_chunk, count_chunk in zip(row_chunks, count_chunks):
+                        dataset[row_chunk, value] += count_chunk
+                self.pending_ids = []
+                self.pending_rows = []
+                self.pending_columns = []
+                self.pending_counts = []
 
-
-def tabulate(seqf, metadata_mapping, size_labels=False):
+def fasta_to_ananke(seqf, timeseriesdb, size_labels=False):
     """Count the unique sequences in a FASTA file, tabulating by sample.
 
     Parameters
     ----------
     seqf: file
         input FASTA sequence file (not wrapped, two lines per record)
-    metadata_mapping: pandas.DataFrame
-        metadata table contained in Pandas DataFrame
     size_labels: boolean
         true if FASTA file is already compressed to unique sequences (and 
         contains USEARCH-style size annotations in the label, i.e., 
         >SEQUENCEID;size=####;
 
-    Returns
-    -------
-    seqcount: dict {int:{str:int}}
-        dict of dicts, with first key as the DNA sequence hash, second key
-        as the sample name, and final int value as the sequence count within 
-        that sample
     """
 
-    i = 0
-    samplenames = set(list(metadata_mapping["#SampleID"]))
-    sample_name_array = np.array(metadata_mapping["#SampleID"])
-    seqcount = defaultdict(lambda: defaultdict(int))
-    prev_sample_name = ""
-
-    #Keep track of skipped sequences
-    skipped = 0
-    skipped_samples = set()
+    the_count = CountAccumulator(timeseriesdb)
 
     for line in seqf:
         assert line[0] == ">", "Label line began with %s, not >. Is " \
           "your FASTA file one-line-per-sequence?" % (line[0],)
         #Assume first line is header
         sample_name = line.split("_")[0][1:]
-        if sample_name != prev_sample_name:
-            if sample_name in samplenames:
-                prev_sample_name = sample_name
-            else:
-                #Skip the next sequence
-                # Readline if py3, next if py2
-                if sys.version_info[0] >= 3:
-                    seqf.readline()
-                else:
-                    seqf.next()
-                i += 1
-                skipped += 1
-                skipped_samples.add(sample_name)
-                continue
-        if sys.version_info[0] >= 3:
-            sequence = seqf.readline().strip()
-        else:
-            sequence = seqf.next().strip()
+        sequence = seqf.readline().strip()
         assert sequence[0] != ">", "Expected sequence, got label. Is \
           your FASTA file one-line-per-sequence?"
         if size_labels:
-            if (";" not in line) | ("=" not in line):
+            if "=" not in line:
                 raise ValueError("FASTA size labels specified but not found.")
             size = line.strip().split(";")[-1].split("=")[-1]
-            seqcount[sequence][sample_name] += int(size)
+            the_count.count(sequence, sample_name, increment = int(size))
         else:
-            seqcount[sequence][sample_name] += 1
-        i+=1
-        #This needs to be replaced by something better
-        if (i%10000 == 0):
-            sys.stdout.write("\r%d" % i)
-            sys.stdout.flush()
-    sys.stdout.write("\n")
-    sys.stdout.flush()
-    if (skipped > 0):
-        warnings.warn("Skipped %d sequences (no match to sample name" \
-          "in metadata file). Sample names: %s" % (skipped, \
-          str(list(skipped_samples))))
+            the_count.count(sequence, sample_name)
+    the_count.push()
+    seqf.close()
 
-    return seqcount
-
-
-def write_csr(timeseriesdb, seqcount, outseqf, sample_name_array):
-    """Convert the seqcount dict structure to a compressed sparse row matrix,
-    then write it to an Ananke TimeSeriesData object and a FASTA file, in
-    chunks.
-
-    Parameters
-    ----------
-    timeseriesdb: ananke._database.TimeSeriesData
-        TimeSeriesData object that encapsulates a .h5 file
-    seqcount: dict {int:{str:int}}
-        dict of dicts output from tabulate function
-    outseqf: file
-        a file object pointing to a FASTA file that will contain unique
-        sequences and their size data
-    sample_name_array: numpy.array
-        an array containing the sample names, taken from the metadata mapping
-
-    Returns
-    -------
-    unique_indices: list
-        contains all of the sample names included in the Ananke data file
-    """
-    # Set stage for a CSR sparse matrix
-    data = []
-    indptr = []
-    indices = []
-    # Use to ensure all indices exist at the end
-    unique_indices = []
-    hashseq_list = []
-    j = 0
-
-    # From the seqcount dict containing the time-series for each hash
-    # build up a CSR matrix structure
-    # At the same time, print each unique sequence and its size to a FASTA
-    # file that can be used for clustering and taxonomic classification
-    for sequence, abundance_dict in seqcount.items():
-        md5hash = hashlib.md5()
-        md5hash.update(sequence.encode())
-        hashseq = md5hash.hexdigest()
-        hashseq_list.append(hashseq)
-        abundance_list = []
-        rowsum = 0
-        indptr.append(j)
-        for col, sample_name in enumerate(sample_name_array):
-            if sample_name in abundance_dict.keys():
-                abundance = abundance_dict[sample_name]
-                rowsum += abundance
-                data.append(abundance)
-                indices.append(col)
-                if (col not in unique_indices):
-                    unique_indices.append(col)
-                j += 1
-        #Write the unique sequence file
-        outseqf.write(">%s;size=%d;\n" % (hashseq,rowsum))
-        outseqf.write("%s\n" % sequence)
-        #Don't let this get too large before dumping it to disk
-        if (len(indptr) >= 500):
-            timeseriesdb.add_timeseries_data(data, indices, \
-                                             indptr, hashseq_list)
-            # Clear out the existing data
-            hashseq_list = []
-            data = []
-            indices = []
-            indptr = []
-    # Add any data that's left        
-    timeseriesdb.add_timeseries_data(data, indices, indptr, hashseq_list)
-
-    return unique_indices
-
-def hash_sequence(sequence):
-    md5hash = hashlib.md5()
-    md5hash.update(sequence.encode())
-    return md5hash.hexdigest()
-
-
-def fasta_to_ananke(sequence_path, metadata_path, time_name, \
-              timeseriesdata_path, outseq_path, time_mask=None, \
-              size_labels = False):
-    """Count the unique sequences in a FASTA file, tabulating by time points.
-
-    Save the results to an Ananke HDF5 file.
-    """
-
-    # Grab the metadata from the file
-    metadata_mapping = read_metadata(metadata_path, time_name, time_mask)
-
-    # Now open the sequence file
-    # Input format assumptions: 
-        #- sequences and headers take 1 line each (i.e., not wrapped FASTA)
-        #- no blank lines
-    
-    # Open files for reading and writing
-    seqf = open(sequence_path,'r')
-    outseqf = open(outseq_path, 'w')
-    timeseriesdb = TimeSeriesData(timeseriesdata_path)
-    
-    # Iterate through the input FASTA file, tabulating unique sequences
-    seqcount = tabulate(seqf, metadata_mapping, size_labels)
-
-    print("Writing table to file")
-
-    # Get the shape of the data
-    sample_name_array = np.array(metadata_mapping["#SampleID"])
-    ngenes = len(seqcount)
-    nsamples = len(sample_name_array)
-    nobs = 0
-
-    for sequence, abundance_dict in seqcount.items():
-        nobs += len(abundance_dict)
-
-    # Resize the Ananke TimeSeriesData object
-    timeseriesdb.resize_data(ngenes, nsamples, nobs)
-    timeseriesdb.insert_array_by_chunks("samples/names", sample_name_array)
-    timeseriesdb.insert_array_by_chunks("samples/time", 
-                                        metadata_mapping[time_name],
-                                        transform_func = float)
-
-    if time_mask is not None:
-        timeseriesdb.insert_array_by_chunks("samples/mask",
-                                            metadata_mapping[time_mask])
-    else:
-        #Set a dummy mask
-        timeseriesdb.insert_array_by_chunks("samples/mask",
-                                            [1]*len(sample_name_array))
-
-    unique_indices = write_csr(timeseriesdb, seqcount, \
-                               outseqf, sample_name_array)
-
-    print("Done writing to %s" % timeseriesdata_path)
-    
-    # Check consistency of the data, warn if samples are missing
-    if (len(unique_indices) < nsamples):
-        warnings.warn("Number of time-points retrieved from sequence " \
-          "file is less than the number of samples in metadata file. " \
-          "%d samples are missing. Consider removing extraneous samples " \
-          "from the metadata file. You will want to run `ananke filter` to " \
-          "remove empty samples."
-          % (nsamples - len(unique_indices),))
-
+#TODO: Rewrite 
 def dada2_to_ananke(table_path, metadata_path, time_name, timeseriesdata_path,
                     outseq_path, time_mask=None):
     """Converts a DADA2 table from dada2::makeSequenceTable to an Ananke HDF5
