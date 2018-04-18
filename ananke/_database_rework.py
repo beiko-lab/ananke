@@ -140,10 +140,12 @@ class TimeSeriesData(object):
                                  data=[str(x).encode() for x in sample_names])
 
     def register_timeseries(self, names):
+        stored_names = self.get_array_by_chunks("timeseries/ids")
+        # Don't re-add duplicates
+        new_names = [ x for x in names if x.encode() not in stored_names ]
         nts = self._h5t["timeseries/ids"].shape[0]
-        print(self._h5t["timeseries/ids"].shape)
-        self.resize_data(nts + len(names))
-        self._h5t["timeseries/ids"][nts:] = [ x.encode() for x in names ]
+        self.resize_data(nts + len(new_names))
+        self._h5t["timeseries/ids"][nts:] = [ x.encode() for x in new_names ]
         return nts + len(names)
 
     @lru_cache(maxsize=256)
@@ -400,12 +402,28 @@ class TimeSeriesData(object):
         p_max = cluster_attrs["param_max"]
         p_step = cluster_attrs["param_step"]
         p_index = int(round((epsilon - p_min) / p_step))
-        return p_index 
+        return p_index
+
+    def get_epsilon_range(self):
+        cluster_attrs = self._h5t["timeseries/clusters"].attrs
+        p_min = cluster_attrs["param_min"]
+        p_max = cluster_attrs["param_max"]
+        p_step = cluster_attrs["param_step"]
+        return np.arange(p_min, p_max, p_step)
+
+    def get_cluster(self, cluster_id, epsilon):
+        epsilon_index = self.get_epsilon_index(epsilon)
+        cluster = self._h5t["timeseries/clusters"][:,epsilon_index]
+        return np.where(cluster==cluster_id)[0]
 
     def insert_cluster(self, indices, cluster_num, epsilon):
         p_index = self.get_epsilon_index(epsilon)
         indices = np.sort(np.unique(indices))
-        self._h5t["timeseries/clusters"][indices, p_index] = str(cluster_num)
+        self._h5t["timeseries/clusters"][indices, p_index] = cluster_num
+
+    def reset_clusters(self):
+        #TODO: Clear the attrs
+        self._h5t["timeseries/clusters"][:,:] = -2
 
     def insert_array_by_chunks(self, target, array, 
                                transform_func = lambda x: str(x).encode(),
