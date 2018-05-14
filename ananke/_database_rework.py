@@ -60,9 +60,9 @@ class TimeSeriesData(object):
         -------
         self: TimeSeriesData object
         """
-        # Create the new file, if required
-        h5t = h5.File(h5_file_path)
+        h5t = h5.File(h5_file_path, 'a')
         self._h5t = h5t
+        
         # Create the required datasets (initialize empty)
         
         if "origin_version" in self._h5t.attrs:
@@ -71,7 +71,7 @@ class TimeSeriesData(object):
                 raise ImplementationError("Ananke version 0.X files are not compatible with Ananke 1.0 at this time")
             else:
                 #Any existing-file-loading steps should be done here; none right now
-                pass
+                return
         else:
             # Create a new file if origin_version doesn't exist
             self._h5t.attrs.create("origin_version", str(__version__),
@@ -396,6 +396,15 @@ class TimeSeriesData(object):
                 cluster_list[i] = "NF"
         self.insert_array_by_chunks('timeseries/altclusters', cluster_list)
 
+    def initialize_for_clustering(self, param_min, param_max, param_step):
+        epsilon_range = np.arange(param_min, param_max, param_step)
+        cluster_attrs = self._h5t["timeseries/clusters"].attrs
+        cluster_attrs.create("param_min", param_min)
+        cluster_attrs.create("param_max", param_max)
+        cluster_attrs.create("param_step", param_step)
+        self._h5t["timeseries/clusters"].resize(len(epsilon_range), axis=1)
+        return cluster_attrs
+
     def get_epsilon_index(self, epsilon):
         cluster_attrs = self._h5t["timeseries/clusters"].attrs
         p_min = cluster_attrs["param_min"]
@@ -410,6 +419,11 @@ class TimeSeriesData(object):
         p_max = cluster_attrs["param_max"]
         p_step = cluster_attrs["param_step"]
         return np.arange(p_min, p_max, p_step)
+                
+    def get_cluster_by_index(self, ts_index, epsilon):
+        epsilon_index = self.get_epsilon_index(epsilon)
+        cluster_id = self._h5t["timeseries/clusters"][ts_index, epsilon_index]
+        return cluster_id
 
     def get_cluster(self, cluster_id, epsilon):
         epsilon_index = self.get_epsilon_index(epsilon)
@@ -420,6 +434,14 @@ class TimeSeriesData(object):
         p_index = self.get_epsilon_index(epsilon)
         indices = np.sort(np.unique(indices))
         self._h5t["timeseries/clusters"][indices, p_index] = cluster_num
+
+    def get_ts_neighbours(self, ts_index, epsilon):
+        p_index = self.get_epsilon_index(epsilon)
+        cluster_id = self._h5t["timeseries/clusters"][ts_index, p_index]
+        if cluster_id == -2:
+            return [-2]
+        else:
+            return np.where(self._h5t["timeseries/clusters"][:, p_index] == cluster_id)[0]
 
     def reset_clusters(self):
         #TODO: Clear the attrs

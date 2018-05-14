@@ -2,8 +2,8 @@ import statsmodels.api as sm
 from statsmodels.tsa.arima_process import arma_generate_sample
 import numpy as np
 from scipy.stats import nbinom
-seeds = 3
-np.random.seed(seeds)
+#seeds = 3
+#np.random.seed(seeds)
 def normab(x, a, b):
     '''
     Normalize input signal x by a lower bound a and an upper bound b

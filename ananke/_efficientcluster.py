@@ -46,14 +46,14 @@ class OutOfCoreDistances:
 
 # Class that holds the information from a time series for DBSCAN clustering
 class TimeSeries:
-    def __init__(self, seqid, ts_data, time_point_slopes, abundance=None, index=None):
+    def __init__(self, seqid, ts_data, time_point_deltas, abundance=None, index=None):
         self.name = seqid
         self.abundance = abundance
         self.data = ts_data
-        self.slopes = (ts_data[1:] - ts_data[0:-1]) / time_point_slopes
+        self.slopes = (ts_data[1:] - ts_data[0:-1]) / time_point_deltas
         # Set to the noise bin, -1, by default.
         # Overwrite when proven otherwise.
-        self.cluster_id = -1
+        self.cluster_id = -2
         # Initialize as not a core point
         # Not core and self.n_neighbourhood > 0 implies a border point
         self.core = False
@@ -119,7 +119,7 @@ def compute_distance(time_series1, time_series2,
         distance, path = fastdtw(time_series1.data, time_series2.data)
     elif distance_measure == 'ddtw':
         distance, path = DDTW(time_series1.data, time_series2.data)
-        distance = min([min(x) for x in distance])
+        distance = distance[-1, -1]
     return distance
 
 
@@ -147,36 +147,56 @@ def sample_distances(timeseries_list, distance_measure):
 
     return max_dist
 
+class TimeSeriesIterator(object):
+    def __init__(self, timeseriesdata, time_point_deltas):
+        self.timeseriesdata = timeseriesdata
+        self.time_point_deltas = time_point_deltas
+        self.i = 0
+
+    def __iter__(self):
+        self.i = 0
+        return self
+
+    def __next__(self):
+        if self.i >= self.timeseriesdata._h5t["data/timeseries/matrix"].shape[0]:
+            raise StopIteration
+        ts_data = self.timeseriesdata._h5t["data/timeseries/matrix"][self.i,:]
+        i = self.i
+        self.i += 1
+        return TimeSeries(str(i), ts_data/sum(ts_data), self.time_point_deltas)
+
 #Search through each of the timeseries in the list and find the neighbours within
 # epsilon, for a given epsilon
-# Return indices for neighbours
+# Return a list of (eps, cluster_id) pairs, denoting the nearest cluster at each epsilon level
 #TODO: Figure out how to properly handle multiple series and replicates
 #For now, it just takes a single timeseries at data/timeseries/*
 #TODO: multithread it
-def get_nearest_clusters(timeseriesdata, seed_data, distance_measure = 'sts'):
+def get_nearest_cluster(timeseriesdata, seed_data, distance_measure = 'sts', n_threads=1):
     cluster_attrs = timeseriesdata._h5t["timeseries/clusters"].attrs
     max_dist = cluster_attrs["epsilon_factor"]
     target = "data/timeseries/"
     time_points = timeseriesdata.get_array_by_chunks(target + "time")
     time_points = np.array([ int(x) for x in time_points ])
-    time_point_slopes = time_points[1:] - time_points[0:-1]
-    ts1 = TimeSeries("seed", np.array(seed_data)/sum(seed_data), time_point_slopes)
+    time_point_deltas = time_points[1:] - time_points[0:-1]
+    ts1 = TimeSeries("seed", np.array(seed_data)/sum(seed_data), time_point_deltas)
     p_dist_func = partial(compute_distance, 
                           time_series2 = ts1,
                           distance_measure = distance_measure)
     min_distance = 1000
-    for i in range(timeseriesdata._h5t[target + "matrix"].shape[0]):
-        timeseries = timeseriesdata._h5t[target + "matrix"][i,:]
-        ts2 = TimeSeries("query", np.array(timeseries)/sum(timeseries), time_point_slopes, index=i)
-        distance = p_dist_func(ts2)
+    time_series_iterator = TimeSeriesIterator(timeseriesdata, time_point_deltas)
+    p = Pool(n_threads)
+    results = p.map(p_dist_func, time_series_iterator, chunksize = 1000)
+    for i, distance in enumerate(results):
+    #for i, timeseries in enumerate(time_series_iterator):
+    #    distance = p_dist_func(timeseries)
         distance = distance / max_dist
         if distance < min_distance:
             min_distance = distance
-            nearest_neighbour = ts2
-    
+            nearest_neighbour_index = i
+    p.close() 
     return zip(timeseriesdata.get_epsilon_range(), 
             timeseriesdata._h5t["timeseries/clusters"]
-                    [nearest_neighbour.original_index])
+                    [nearest_neighbour_index])
 
 # Cluster around a given seed, finding its neighbours, its neighbours neighbours,
 # and so on, until no more new neighbours are found. This is the core clustering
@@ -188,7 +208,8 @@ def cluster_around_seed(ts_seed, timeseries_list, timeseriesdata,
     
     cluster_attrs = timeseriesdata._h5t["timeseries/clusters"].attrs
     max_dist = cluster_attrs["epsilon_factor"]
-
+    epsilon_index = timeseriesdata.get_epsilon_index(epsilon)
+    epsilon_range = timeseriesdata.get_epsilon_range()
     # Store found neighbours within epsilon
     queue = set()
     # Initialize the neighbour compute queue with the abundant seed 
@@ -211,14 +232,22 @@ def cluster_around_seed(ts_seed, timeseries_list, timeseriesdata,
         # checked against all other time series, and since the distances
         # are symmetric, we can exclude them here to avoid double computing
         timeseries_subset = [x for x in timeseries_list if not (x.visited | x.queued)]
+        if epsilon_index < len(epsilon_range) - 1:
+            # If a previous clustering exists, exploit it to limit this search
+            upstairs_neighbour_ids = timeseriesdata.get_ts_neighbours(ts1.original_index, epsilon_range[epsilon_index + 1])
+            timeseries_subset = [x for x in timeseries_subset if x.original_index in upstairs_neighbour_ids]
+            
         p_distance_func = partial(compute_distance, 
                                   time_series2 = ts1, 
                                   distance_measure = distance_measure)
-        results = p.map(p_distance_func, timeseries_subset)
+        results = p.map(p_distance_func, timeseries_subset, chunksize=1000)
         for ts2, distance in zip(timeseries_subset, results):
             distance = distance / max_dist
             if distance <= epsilon:
                 neighbourhood.append(ts2)
+        #If the point has more than min_pts neigh ours within epsilon
+        #then it is a core point and its neighbourhood is in the cluster
+        #Since we register every core point's neighbours, this is sufficient
         if len(neighbourhood) >= min_pts:
             for neighbour in neighbourhood:
                     queue.add(neighbour)
@@ -247,7 +276,7 @@ def load_data_for_clustering(timeseriesdata, series=None):
     matrix = timeseriesdata._h5t[target + "matrix"]
     time_points = timeseriesdata.get_array_by_chunks(target + "time")
     time_points = np.array([ int(x) for x in time_points ])
-    time_point_slopes = time_points[1:] - time_points[0:-1]
+    time_point_deltas = time_points[1:] - time_points[0:-1]
     names = timeseriesdata.get_array_by_chunks("timeseries/ids")
     nrows = matrix.shape[0]
     ncols = matrix.shape[1]
@@ -262,7 +291,7 @@ def load_data_for_clustering(timeseriesdata, series=None):
         raise ValueError("Time-series matrix contains no information. " \
                          "Was all of your data filtered out?")
 
-    return matrix, names, nrows, abundances, time_point_slopes
+    return matrix, names, abundances, time_point_deltas
 
 def auto_cluster(timeseriesdata, min_pts = 2,
                       distance_measure = 'sts', param_min = 0.01,
@@ -270,8 +299,8 @@ def auto_cluster(timeseriesdata, min_pts = 2,
                       n_threads = 1, store_ooc = False):
 
     ######## Setup ########
-    matrix, names, nrows, abundances, time_point_slopes = load_data_for_clustering(timeseriesdata)
-
+    matrix, names, abundances, time_point_deltas = load_data_for_clustering(timeseriesdata)
+    nrows = matrix.shape[0]
     print("Initializing TimeSeries objects")
     
     timeseries_list = []
@@ -280,11 +309,11 @@ def auto_cluster(timeseriesdata, min_pts = 2,
         # Make a new TimeSeries object
         ts = TimeSeries(names[i],
                         np.squeeze(np.asarray(matrix[i,].T)),
-                        time_point_slopes,
+                        time_point_deltas,
                         abundances[i],
                         i)
         insort(timeseries_list, ts)
-        print("%d time series initialized and sorted" % (i,), end='\r')
+        print("%d time series initialized and sorted" % (i+1,), end='\r')
     print("\nRemoving original matrix from memory")
     # Remove the matrix from memory, since all the data is stored elsewhere
     del matrix
@@ -303,15 +332,10 @@ def auto_cluster(timeseriesdata, min_pts = 2,
     # and affects the scaling of epsilon to a domain of [0,1] and therefore
     # affects clustering consistency, so if we need to pick clustering back up
     # we must store this value to re-normalize against
-    cluster_attrs = timeseriesdata._h5t["timeseries/clusters"].attrs
+    cluster_attrs = timeseriesdata.initialize_for_clustering(param_min, param_max, param_step)
     cluster_attrs.create("epsilon_factor", max_dist)
-    cluster_attrs.create("param_min", param_min)
-    cluster_attrs.create("param_max", param_max)
-    cluster_attrs.create("param_step", param_step)
     # Start with largest epsilon and decrease
     epsilon_range = np.arange(param_min, param_max, param_step)
-
-    timeseriesdata._h5t["timeseries/clusters"].resize(len(epsilon_range), axis=1)
 
     for epsilon in epsilon_range[::-1]:
     # Pre-processing is complete, onto the distance calculations
@@ -319,6 +343,7 @@ def auto_cluster(timeseriesdata, min_pts = 2,
         ######## CLUSTERING ########
         n_clusts = 0
         epsilon_index = timeseriesdata.get_epsilon_index(epsilon)
+        print(epsilon_index)
         # Take the top n_precompute most abundant sequences
         abundant_sequences = timeseries_list[-n_precompute:]
 
@@ -327,7 +352,7 @@ def auto_cluster(timeseriesdata, min_pts = 2,
             ts = abundant_sequences.pop()
             try:
                 #Cluster_id != -2 means it is not clustered
-                while timeseriesdata._h5t["timeseries/clusters"][ts.original_index, epsilon_index] != -2:
+                while timeseriesdata.get_cluster_by_index(ts.original_index, epsilon) != -2:
                     ts = abundant_sequences.pop()
             except IndexError:
                 break
