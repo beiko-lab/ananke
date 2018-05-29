@@ -3,189 +3,235 @@
 #Argument handler for temporal clustering scripts
 
 import argparse
-
-from ._tabulate import fasta_to_ananke, dada2_to_ananke, csv_to_ananke
-from ._cluster import run_cluster
-from ._database import TimeSeriesData
-from .ananke_simulate import create_simulation_data, score_simulation
-from .ananke_stats import print_database_info
-from .ananke_misc import translate_otus, rarefy_even
+import numpy as np
+from ananke._database import AnankeDB
+from ananke._initialize import initialize_by_shape, initialize_from_metadata
+from ananke._simulation import simulate_and_import, score_simulation
+from ananke._cluster import precompute_distances, save_blooms, load_blooms
 
 def main():
     #  Argument parsing
-    parser = argparse.ArgumentParser(prog='main')
-    subparsers = parser.add_subparsers(title='subcommands',
-                                       description='the following subcommands \
-                                    are possible: tabulate, filter, cluster, \
-                                    add, import_from_dada2, import_from_csv', 
-                                    dest='subparser_name')
+    p = argparse.ArgumentParser(prog='main')
+    sp = p.add_subparsers(title='subcommands',
+                               description='The following subcommands \
+                               are possible: initialize, info, import, filter, \
+                               cluster', dest='action')
     
-    #  Tabulate script options
-    tabulate_parser = subparsers.add_parser("tabulate")
-    tabulate_parser.add_argument("-i", metavar="input",
-                                 help="FASTA sequence file",
-                                 required=True, type=str)
-    tabulate_parser.add_argument("-m", metavar="mapping",
-                                 help="Metadata mapping file",
-                                 required=True, type=str)
-    tabulate_parser.add_argument("-o", metavar="output",
-                                 help="Output HDF5 data file",
-                                 required=True, type=str)
-    tabulate_parser.add_argument("-f", metavar="fasta", 
-                                 help="Output FASTA file", required=True,
-                                 type=str)
-    tabulate_parser.add_argument("-t", metavar="time_label",
-                                 help="Column name for time points in \
-                                       metadata file", default="time_points",
-                                 type=str)
-    tabulate_parser.add_argument("--multi", help="Indicates the input data \
-                                                  contains multiple \
-                                                  time-series, requires \
-                                                  column name of time-series \
-                                                  mask variable", 
-                                 type=str, required=False)
-    tabulate_parser.add_argument("--size_labels", help="Toggle if the number \
-                                 of occurrences of each sequence is in the \
-                                 FASTA label (in the format: \
-                                 '>SampleXYZ_50;size=100')",
-                                 action="store_true")
-
-    #  Import from DADA2 options
-    dada2_parser = subparsers.add_parser("import_from_dada2")
-    dada2_parser.add_argument("-i", metavar="input", 
-                              help="Input DADA2 table that has sequences as \
-                                   rows and samples as columns",
-                              required=True, type=str)
-    dada2_parser.add_argument("-m", metavar="mapping",
-                              help="Metadata mapping file",
-                              required=True, type=str)
-    dada2_parser.add_argument("-o", metavar="output",
-                              help="Output HDF5 data file",
-                              required=True, type=str)
-    dada2_parser.add_argument("-f", metavar="fasta",
-                              help="Output FASTA file",
-                              required=True, type=str)
-    dada2_parser.add_argument("-t", metavar="time_label",
-                              help="Column name for time points in metadata \
-                                    file", required=True, type=str)
-    dada2_parser.add_argument("--multi", help="Indicates the input data \
-                                               contains multiple time series, \
-                                               requires column name of \
-                                               time-series mask variable",
-                              required=False, type=str)
-
-    #  Import from CSV options
-    csv_parser = subparsers.add_parser("import_from_csv")
-    csv_parser.add_argument("-i", metavar="input",
-                            help="Input CSV table that has time series as rows\
-                                  and samples/time points as columns.",
-                            required=True, type=str)
-    csv_parser.add_argument("-m", metavar="mapping",
-                            help="Metadata mapping file",
-                            required=True, type=str)
-    csv_parser.add_argument("-o", metavar="output",
-                            help="Output HDF5 data file path",
-                            required=True, type=str)
-    csv_parser.add_argument("-t", metavar="time_label",
-                            help="Column name for time points in metadata \
-                                  file",
-                            required=True, type=str)
-    csv_parser.add_argument("--multi", help="Indicates the input data \
-                                             contains multiple time series, \
-                                             requires column name of \
-                                             time-series mask variable.",
-                            required=False, type=str)
-
-    #  Filter script options
-    filter_parser = subparsers.add_parser("filter")
-    filter_parser.add_argument("-i", 
-                               metavar="input", 
-                               help="HDF5 data file", 
-                               required=True, 
-                               type=str)
-    filter_parser.add_argument("-o", 
-                               metavar="output", 
-                               help="Filename for output filtered data file", 
-                               required=True, 
-                               type=str)
-    filter_parser.add_argument("-t", metavar="threshold", help="Threshold for filtering criterion", required=True, type=str)
-    filter_parser.add_argument("-f", metavar="filter", help="Filter type: proportion, abundance, presence", required=True, type=str, default='presence')
-
-    #  Rarefy script options
-    rarefy_parser = subparsers.add_parser("rarefy")
-    rarefy_parser.add_argument("-i", metavar="input", help="HDF5 data file", required=True, type=str)
-
-    #  Cluster script options
-    cluster_parser = subparsers.add_parser("cluster")
-    cluster_parser.add_argument("-i", metavar="input", help="HDF5 data file", required=True, type=str)
-    cluster_parser.add_argument("-n", metavar="numthreads", help="Number of threads for computing distance matrix", required=True, type=str)
-    cluster_parser.add_argument("-l", metavar="min_eps", help="Lower bound for epsilon for clustering step.", default=0.01, required=False, type=float)
-    cluster_parser.add_argument("-u", metavar="max_eps", help="Upper bound for epsilon for clustering step.", default=10.0, required=False, type=float)
-    cluster_parser.add_argument("-s", metavar="step_eps", help="Step size for epsilon for clustering step.", default=0.01, required=False, type=float)
-    cluster_parser.add_argument("-d", metavar="dist_measure", help="Distance measure (default: sts, Options: sts, euclidean, cityblock, cosine, l1, l2, manhattan)", required=False, type=str, default="sts")
-    cluster_parser.add_argument("--clr",
-                                help="Normalize by centre log ratio transform" \
-                                " to properly deal with compositionality of" \
-                                " the data. If -c is not given, normalization" \
-                                " is done using sample-wise proportions and " \
-                                " time-series are transformed with Z-scores",
-                                action="store_true")
-
-    #  Status script options
-    status_parser = subparsers.add_parser("info")
-    status_parser.add_argument("-i", metavar="input", help="HDF5 data file", required=True, type=str)
-
-    #  Add data scripts (taxonomy + sequence clusters)
-    add_parser = subparsers.add_parser("add")
-    add_parser.add_argument("action", choices=["taxonomy", "sequence_clusters"], help="taxonomy: add taxonomic classifications into data file; sequence_clusters: add traditional sequence-based clustering labels into data file")
-    add_parser.add_argument("-i", metavar="input", help="HDF5 data file", required=True, type=str)
-    add_parser.add_argument("-d", metavar="data", help="Data file to add (taxonomic label file or identity cluster files)", required=True, type=str)
-    simulation_parser = subparsers.add_parser("simulation")
-    simulation_parser.add_argument("-d", metavar="database", help="HDF5 database filename (will be created)", required=True, type=str)
-    simulation_parser.add_argument("-t", metavar="ntimepoints", help="Number of time-points in simulation", required=True, type=int)
-    simulation_parser.add_argument("-r", metavar="nreps", help="Number of repetitions for each seed", required=True, type=int)
-    score_parser = subparsers.add_parser("score_simulation")
-    score_parser.add_argument("-d", metavar="database", help="HDF5 database filename (will be created)", required=True, type=str)
-
-    #  Add misc utilities
-    clusters_parser = subparsers.add_parser("translate_clusters")
-    clusters_parser.add_argument("-i", metavar="input", help="Input FASTA sequence file", required=True, type=str)
-    clusters_parser.add_argument("-c", metavar="clusters", help="Input cluster file (seq_otus.txt)", required=True, type=str)
-    clusters_parser.add_argument("-o", metavar="output", help="Output cluster file", required=True, type=str)
-    args = parser.parse_args()
+    #### Initialize
+    ##### These subcommands are for creating a new (empty) AnankeDB file
+    ##### from some input format. This builds the database with the appropriate
+    ##### shapes and sample names.
+    init_p = sp.add_parser("initialize")
     
-    #Route to the proper routines
-    if args.subparser_name == "tabulate":
-        fasta_to_ananke(args.i, args.m, args.t, args.o, args.f, args.multi, args.size_labels)
-    elif args.subparser_name == "import_from_dada2":
-        dada2_to_ananke(args.i, args.m, args.t, args.o, args.f, args.multi)
-    elif args.subparser_name == "import_from_csv":
-        csv_to_ananke(args.i, args.m, args.t, args.o, args.multi)
-    elif args.subparser_name == "filter":
-        timeseriesdb = TimeSeriesData(args.i)
-        timeseriesdb.filter_data(args.o, args.f, args.t)
-    elif args.subparser_name == "cluster":
-        run_cluster(args.i, int(args.n), args.d, args.l, 
-                    args.u, args.s, args.clr)
-    elif args.subparser_name == "add":
-        if args.action == "taxonomy":
-            timeseriesdb = TimeSeriesData(args.i)
-            timeseriesdb.add_taxonomy_data(args.d)
-        elif args.action == "sequence_clusters":
-            timeseriesdb = TimeSeriesData(args.i)
-            timeseriesdb.add_sequencecluster_data(args.d)
-    elif args.subparser_name == "simulation":
-        create_simulation_data(args.d, args.t, args.r)
-    elif args.subparser_name == "score_simulation":
-        score_simulation(args.d)
-    elif args.subparser_name == "info":
-        timeseriesdb = TimeSeriesData(args.i)
-        print_database_info(timeseriesdb)
-    elif args.subparser_name == "translate_clusters":
-        translate_otus(args.i, args.c, args.o)
-    elif args.subparser_name == "rarefy":
-        timeseriesdb = TimeSeriesData(args.i)
-        rarefy_even(timeseriesdb)
+    init_sp = init_p.add_subparsers(title="initialize", dest='initialize',
+                                    description="Create a new Ananke database file by" \
+                                                " specifying shape or a mapping file.")
+    map_p = init_sp.add_parser("mapping")
+    map_p.add_argument("-o", metavar="output",
+                       help="Output HDF5 data file",
+                       required=True,
+                       type=str)
+    map_p.add_argument("-m", metavar="mapping",
+                       help="Metadata mapping file",
+                       required=True,
+                       type=str)
+    map_p.add_argument("-s", metavar="sample_id_col",
+                       help="Name of the column that contains the sample IDs",
+                       required=True,
+                       type=str)
+    map_p.add_argument("-t", metavar="time_col",
+                       help="Name of the column that contains the time points",
+                       required=True,
+                       type=str)
+    map_p.add_argument("-n", metavar="series_name_col",
+                       help="Name of the column that contains the series identifiers",
+                       required=False,
+                       type=str,
+                       default=None)
+    map_p.add_argument("-r", metavar="replicate_col",
+                       help="Name of the column that contains the replicate identifiers",
+                       required=False,
+                       type=str,
+                       default=None)
+    map_p.add_argument("-f", metavar="time_format_str",
+                       help="Format string for Arrow package to parse the time points",
+                       required=False,
+                       type=str,
+                       default='X')
+
+    shape_p = init_sp.add_parser("shape")
+    shape_p.add_argument("-o", metavar="output",
+                         help="Output HDF5 data file",
+                         required=True,
+                         type=str)
+    shape_p.add_argument("-n", metavar="num_timepoints",
+                         required=False,
+                         type=int,
+                         default=180)
+    shape_p.add_argument("-t", metavar="timepoints",
+                         help="Timepoints for the simulations",
+                         nargs="*",
+                         required=False,
+                         default=None)
+    shape_p.add_argument("-s", metavar="num_series",
+                         help="Number of series to generate",
+                         required=False,
+                         type=int,
+                         default=1)
+    shape_p.add_argument("-r", metavar="num_replicates",
+                         help="Number of replicates to generate (per series)",
+                         required=False,
+                         type=int,
+                         default=1)
+
+    #### Info
+    ##### These subcommands provide information on an Ananke file or analysis
+    ##### Currently, just takes in a file and spits out the __str__ representation
+    ##### of the AnankeDB
+    info_p = sp.add_parser("info")
+    info_p.add_argument("-i", metavar="input",
+                        help="Input .h5 file",
+                        required=True,
+                        type=str)
+    
+    ##### Import
+    ###### These subcommands fill an empty AnankeDB file with counts from a
+    ###### given data format
+    import_p = sp.add_parser("import")
+    import_sp = import_p.add_subparsers(title="import", dest="import_action",
+                                        description="Import data into an initialized " \
+                                                    "Ananke database file from fasta, " \
+                                                    "or simulation.")
+
+    simu_p = import_sp.add_parser("simulation")
+    simu_p.add_argument("-i", metavar="input",
+                        help="Input Ananke HDF5 file",
+                        required=True,
+                        type=str)
+    simu_p.add_argument("-c", metavar="nclusts",
+                        help="Number of clusters seeds to simulate (distinct time series patterns)",
+                        default=50, type=int)
+    simu_p.add_argument("-t", metavar="nts_per_clust",
+                        help="Number noisy samples of each seed to simulate (distinct time series)",
+                        default=10, type=int)
+    simu_p.add_argument("-n", metavar="nsr",
+                        help="Noise to signal ratio. Proportion of random noise time series, " \
+                             "relative to amount of signal time series.",
+                        default=1, type=float)
+    simu_p.add_argument("-s", metavar="shift_amount",
+                        help="Maximum amount that a simulated time series will be randomly shifted to " \
+                             "simulate lagged processes",
+                        default=0, type=int)
+    simu_p.add_argument("-v", metavar="signal_variance",
+                        help="Variance for the negative binomial sampling of the underlying process",
+                        default=1.75, type=float)
+    simu_p.add_argument("-o", metavar="output",
+                        help="Prefix for output of ground truth signal data",
+                        type=str,
+                        default=None)
+    
+    filter_p = sp.add_parser("filter")
+    filter_p.add_argument("-i", metavar="input",
+                          help="Input Ananke HDF5 file",
+                          required=True,
+                          type=str)
+    filter_p.add_argument("-m", metavar="method",
+                          help="min_sample_presence requires that the sequence be observed in at least " \
+                               "threshold samples. min_sample_proportion requires that the sequence be " \
+                               "observed in at least threshold proportion of the samples.",
+                          choices=["min_sample_presence", "min_sample_proportion"],
+                          default="min_sample_presence", type=str)
+    filter_p.add_argument("-t", metavar="threshold",
+                          help="Filter threshold for the desired filter method.",
+                          default=2,
+                          type=float)
+
+    comp_dist_p = sp.add_parser("compute_distances")
+    comp_dist_p.add_argument("-i", metavar="input",
+                           help="Input Ananke HDF5 file",
+                           required=True,
+                           type=str)
+    comp_dist_p.add_argument("-m", metavar="dist_min",
+                           help="Minimum distance measure for precomputation",
+                           type=float,
+                           default=0.001)
+    comp_dist_p.add_argument("-M", metavar="dist_max",
+                           help="Maximum distance measure for precomputation",
+                           type=float,
+                           default=0.15)
+    comp_dist_p.add_argument("-s", metavar="dist_step",
+                           help="Minimum distance measure for precomputation",
+                           type=float,
+                           default=0.005)
+    comp_dist_p.add_argument("-d", metavar="distance_measure",
+                           help="Distance measure for clustering",
+                           choices=["sts","dtw","ddtw","euclidean"],
+                           default="sts",
+                           type=str)
+    comp_dist_p.add_argument("--on-disk", action="store_false", dest="in_memory", 
+                           help="If specified, the data will be pulled from disk. " \
+                           "This will be slower, but reduces the memory footprint " \
+                           "significantly.")
+    comp_dist_p.add_argument("-z", metavar="simulation_signal",
+                           help="Simulation signal used for scoring simulations.",
+                           type=str)
+    comp_dist_p.add_argument("-o", metavar="simulation_score_output",
+                             help="File to append the simulation scores to",
+                             type=str)
+
+    cluster_p = sp.add_parser("cluster")
+    cluster_p.add_argument("-i", metavar="input",
+                           help="Input Ananke HDF5 file",
+                           required=True,
+                           type=str)
+    cluster_p.add_argument("-e", metavar="epsilon",
+                           help="Epsilon value for DBSCAN clustering. Will use nearest " \
+                                 "value if supplied value was not precomputed.",
+                           type=float,
+                           default=0.01)
+    cluster_p.add_argument("-m", metavar="min_pts",
+                           help="DBSCAN min_pts parameter.",
+                           default=2,
+                           type=int)
+    
+    args = p.parse_args()
+    
+
+    if args.action == 'initialize':
+        if args.initialize == 'mapping':
+            adb = AnankeDB(args.o)
+            adb.initialize_from_metadata()
+        elif args.initialize == 'shape':
+            adb = AnankeDB(args.o)
+            initialize_by_shape(adb, args.n, args.t, args.s, args.r)
+    elif args.action == 'info':
+        adb = AnankeDB(args.i)
+        print(adb)
+    elif args.action == 'import':
+        if args.import_action == 'simulation':
+            adb = AnankeDB(args.i)
+            true_data = simulate_and_import(adb, args.c, args.t, args.n, args.s, args.v)
+            if args.o is not None:
+                np.savetxt(args.o + "_signals.gz", true_data)
+        elif args.import_action == 'fasta':
+            raise NotImplementedError
+    elif args.action == 'filter':
+        adb = AnankeDB(args.i)
+        adb.filter_data(args.m, args.t)
+    elif args.action == 'compute_distances':
+        adb = AnankeDB(args.i)
+        dist_range = np.arange(args.m, args.M, args.s)
+        dbs = precompute_distances(adb, args.d, dist_range, in_memory=args.in_memory)
+        if args.z is not None:
+            outfile = open(args.o, 'a')
+            scores = score_simulation(adb, dbs, args.z, args.d, outfile)
+            outfile.close()
+    elif args.action == 'cluster':
+        adb = AnankeDB(args.i)
+        dbs = load_blooms(adb)
+        dbs.DBSCAN(args.e, args.m)
+    
 
 if __name__ == "__main__":
     main()
+

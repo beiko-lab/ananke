@@ -74,7 +74,6 @@ class CountAccumulator(object):
         
     # Writes the accumulated counts 
     def push(self, chunksize = 10):
-        print("Pushing 100k sequences")
         #row_chunk = []
         #count_chunk = []
         for dataset_name, columns in self.counts.items():
@@ -135,7 +134,7 @@ class CountAccumulator(object):
                 self.pending_columns = []
                 self.pending_counts = []
 
-def fasta_to_ananke(seqf, timeseriesdb, size_labels=False):
+def fasta_to_ananke(seqf, timeseriesdb, size_labels=False, push_at=5e6):
     """Count the unique sequences in a FASTA file, tabulating by sample.
 
     Parameters
@@ -149,7 +148,7 @@ def fasta_to_ananke(seqf, timeseriesdb, size_labels=False):
 
     """
 
-    the_count = CountAccumulator(timeseriesdb)
+    the_count = CountAccumulator(timeseriesdb, push_at=push_at)
 
     for line in seqf:
         assert line[0] == ">", "Label line began with %s, not >. Is " \

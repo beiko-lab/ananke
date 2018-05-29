@@ -1,21 +1,49 @@
-import warnings
-from os import getcwd
-
 import h5py as h5
 import numpy as np
-from scipy.sparse import csr_matrix
+import pandas as pd
+from functools import lru_cache
+import arrow
+
 from .__init__ import __version__
 
-class TimeSeriesData(object):
-    """Class that represents an HDF5 data file on disk that contains Ananke
-       time-series information, including the time-series for each sequence
-       (as a sparse matrix), the sequence/gene metadata, and the 
-       sample/timepoint metadata.
 
-       Contains methods for manipulating and validating Ananke data files.
+# Utility functions
+
+def version_greater_than(origin_version, version):
+    """Compares version numbers
+
+    Parameters
+    ----------
+    origin_version: str
+        origin file version string, triple (major, minor, release), in self._h5t.attrs["origin_version"]
+    version: str
+        version string, triple (major, minor, release)
+
+    Returns
+    -------
+    boolean
+        True if origin_version is greater than provided string
+    """
+    major, minor, release = origin_version.decode("ASCII").split(".")
+    comp_major, comp_minor, comp_release = version.split(".")
+    if int(major) > int(comp_major):
+        return True
+    elif int(major) == int(comp_major):
+        if int(minor) > int(comp_minor):
+            return True
+        elif int(minor) == int(comp_minor):
+            if int(release) > int(comp_release):
+                return True
+    return False
+
+# Main Database class
+
+class AnankeDB(object):
+    """Object that contains the Ananke analysis and facilitates interacting with
+       an Ananke .h5 file
     """
 
-    def __init__(self, h5_file_path):
+    def __init__(self, h5_filepath):
         """Constructor for TimeSeriesData object. Creates an empty file with
         appropriate schema in place, if file did not exist. Otherwise,
         validates and links to file on disk.
@@ -30,210 +58,304 @@ class TimeSeriesData(object):
         -------
         self: TimeSeriesData object
         """
-        # Create the new file, if required
-        h5_table = h5.File(h5_file_path, 'a')
-        self.h5_table = h5_table
+        h5t = h5.File(h5_filepath, 'a')
+        self._h5t = h5t
+        
+        # Keeps track of whether the file is initialized
+        self.initialized = False
+        # Number of time series in the data set
+        self.nts = 0
         # Create the required datasets (initialize empty)
-        if set(self.h5_table.keys()) != {"genes", "timeseries", "samples"}:
-            self.filled_data = False
-            print("Creating required data sets in new HDF5 file at %s" % 
-                                                            (h5_file_path, ))
-            h5_table.create_group("timeseries")
-            h5_table["timeseries"].require_dataset("data", shape=(1,), 
-                                                    dtype=np.dtype('int32'), 
-                                                    maxshape=(None,))
-            h5_table["timeseries"].require_dataset("indices", shape=(1,), 
-                                                   dtype=np.dtype('int32'), 
-                                                   maxshape=(None,))
-            h5_table["timeseries"].require_dataset("indptr", shape=(1,), 
-                                                   dtype=np.dtype('int32'), 
-                                                   maxshape=(None,))
-
-            # Keeps track of which version created the file
-            h5_table.attrs.create("origin_version", str(__version__), 
-                                  dtype=h5.special_dtype(vlen=bytes))
+        
+        if "origin_version" in self._h5t.attrs:
+            origin_version = self._h5t.attrs["origin_version"]
+            if not version_greater_than(origin_version, "0.3.0"):
+                raise ImplementationError("Ananke version 0.X files are not compatible with Ananke 1.0. " \
+                                          "Please re-input data with the current Ananke version.")
+            else:
+                #Any existing-file-loading steps should be done here; none right now
+                if len(self._h5t["data"]) > 0:
+                    self.initialized = True
+                self.nts = self._h5t["timeseries/ids"].shape[0]
+                return
+        else:
+            # Create a new file if origin_version doesn't exist
+            self._h5t.attrs.create("origin_version", str(__version__),
+                                   dtype=h5.special_dtype(vlen=bytes))
+             
+            self._h5t.create_group("data")
 
             # Create genes group
-            h5_table.create_group("genes")
-            h5_table["genes"].require_dataset("sequences", shape=(1,), 
-                              dtype=h5.special_dtype(vlen=bytes), 
-                              maxshape=(None,), exact=False)
-            h5_table["genes"].require_dataset("sequenceids", shape=(1,), 
-                              dtype=h5.special_dtype(vlen=bytes), 
-                              maxshape=(None,), exact=False)
-            h5_table["genes"].require_dataset("clusters", shape=(1,1), 
-                              dtype=h5.special_dtype(vlen=bytes), 
-                              maxshape=(None,None), exact=False, fillvalue=-2)
-            h5_table["genes"].require_dataset("taxonomy", shape=(1,), 
-                              dtype=h5.special_dtype(vlen=bytes), 
-                              maxshape=(None,), exact=False)
-            h5_table["genes"].require_dataset("sequenceclusters", shape=(1,), 
-                              dtype=h5.special_dtype(vlen=bytes), 
-                              maxshape=(None,), exact=False)
-
-            #Fill some arrays with ghost values so rhdf5 doesn't segfault
-            self.fill_array("genes/taxonomy", b"NF")
-            self.fill_array("genes/sequenceclusters", b"NF")
-            
-            h5_table.create_group("samples")
-            h5_table["samples"].require_dataset("names", shape=(1,), 
-                                dtype=h5.special_dtype(vlen=bytes), 
-                                maxshape=(None,), exact=False)
-            h5_table["samples"].require_dataset("time", shape=(1,), 
-                                dtype=np.dtype('int32'), 
-                                maxshape=(None,), exact=False)
-            h5_table["samples"].require_dataset("metadata", shape=(1,), 
-                                dtype=h5.special_dtype(vlen=bytes), 
-                                maxshape=(None,), exact=False)
-            h5_table["samples"].require_dataset("mask", shape=(1,), 
-                                dtype=h5.special_dtype(vlen=bytes), 
-                                maxshape=(None,), exact=False)
-        else:
-            self.filled_data = True
-        #These indices help us populate the timeseries sparse matrix
-        # used by the add_timeseries_data method so that data can be added
-        # piece-wise and never has to be stored fully in RAM
-        self._ts_data_index = 0
-        self._ts_indptr_index = 0
+            self._h5t.create_group("timeseries")
+            #IDs are hash values
+            self._h5t["timeseries"].create_dataset("ids", shape=(0,), 
+                                   dtype=h5.special_dtype(vlen=bytes), 
+                                   maxshape=(None,))
+            self._h5t["timeseries"].create_dataset("clusters", shape=(0,0), 
+                                   dtype=np.int16, 
+                                   maxshape=(None,None), fillvalue=-2)
+            self._h5t["timeseries"].create_dataset("taxonomy", shape=(0,), 
+                                   dtype=h5.special_dtype(vlen=bytes), 
+                                   maxshape=(None,))
+            self._h5t["timeseries"].create_dataset("altclusters", shape=(0,), 
+                                   dtype=h5.special_dtype(vlen=bytes),
+                                   maxshape=(None,))
 
     def __del__(self):
-        """Destructor for TimeSeriesData object
+        """Destructor for Ananke object
 
         Closes the connection to the HDF5 file
         """
-        #if self.h5_table:
-        #    self.h5_table.close()
-        pass
+        if self._h5t:
+            self._h5t.close()
 
-    def version_greater_than(self, version):
-        """Compares version numbers
+    def __str__(self):
+        info = "Origin version: %s" % \
+               (self._h5t.attrs["origin_version"].decode(),) + "\n"
+        if not self.initialized:
+            info += "This file is uninitialized. Initialize with `ananke add-metadata`.\n"
+        else:
+            for group_name in self._h5t["data"]:
+                group = self._h5t["data/" + group_name]
+                if "series" in group.attrs:
+                    info += "Series %s " % (group.attrs["series"].decode(),)
+                if "replicate" in group.attrs:
+                    info += "Replicate %s " % (group.attrs["replicate"].decode(),)
+                info += "Num. of Time Points: %d\n" % (group["matrix"].shape[1])
+            info += "Num. of Time Series: %d" % (self._h5t["timeseries/ids"].shape[0],)
+        return info
+
+    def create_series(self, name, time, sample_names, replicate_id = None):
+        """ Creates a new series in the h5 file. If a replicate_id is supplied,
+            the name of the series will be name_replicateid. All series with
+            the same name but different replicate_ids will be aggregated
+            prior to clustering.
+        """
+        #TODO: Update to have nrows to match the numbers of timeseries in the file already
+        if replicate_id is not None:
+            name = name + "_" + str(replicate_id)
+            self._h5t["data/" + name].attrs.create("replicate", stsr(replicate_id).encode(),
+                                                   dtype=h5.special_dtype(vlen=bytes))
+        self._h5t.create_group("data/" + name)
+        self._h5t.create_dataset("data/" + name + "/matrix",
+                                 dtype=np.int32,
+                                 shape=(0,len(time)), 
+                                 maxshape=(None, len(time)),
+                                 compression="gzip",  # I wonder what the effect of the compression is on speed and file size... TODO: look into this
+                                 fillvalue=0)
+        self._h5t.create_dataset("data/" + name + "/time",
+                                 dtype=h5.special_dtype(vlen=bytes),
+                                 data=[str(x).encode() for x in time])
+        self._h5t.create_dataset("data/" + name + "/names",
+                                 dtype=h5.special_dtype(vlen=bytes),
+                                 data=[str(x).encode() for x in sample_names])
+        self._h5t["data/" + name].attrs.create("series", name.encode(),
+                                               dtype=h5.special_dtype(vlen=bytes))
+
+        # Update the replicate/series schema
+        self._resolve_structure()
+
+    def add_timeseries_ids(self, names):
+        """ Adds empty timeseries to each of the data sets in the file.
+            Once added through this function, timeseries can be set by
+            id or index.
+        """
+        stored_names = self._h5t["timeseries/ids"][:]
+        #stored_names = self.get_array_by_chunks("timeseries/ids")
+        # Don't re-add duplicates
+        new_names = [ x for x in names if x.encode() not in stored_names ]
+        nts = self._h5t["timeseries/ids"].shape[0]
+        self._resize_data(nts + len(new_names))
+        self._h5t["timeseries/ids"][nts:] = [ x.encode() for x in new_names ]
+        self.nts += len(names)
+        return self.nts
+
+    def get_timeseries_data(self, name_or_index, data, series=None, replicate=None):
+        if (series is not None) & (replicate is not None):
+            target = "%s_%s" % (series, replicate)
+        elif (series is not None):
+            target = series
+        elif (replicate is not None):
+            target = replicate
+        else:
+            target = "timeseries"
+
+        if target not in self._h5t["data"]:
+            raise IndexError("Series %s not found in data." % (target,))
+
+        if type(name_or_index) is int:
+            index = name_or_index
+        else:
+            index = self.get_timeseries_index(name_or_index)
+            if index == -1:
+                raise IndexError("Name %s not found in timeseries ids." % (name_or_index,))
+
+        return self._h5t["data/%s/matrix" % (target,)][index, :]
+
+    def get_timepoints(self, series=None, replicate=None):
+        if (series == None) & (replicate == None):
+            target = "timeseries"
+        elif replicate:
+            target = "%s_%s" % (series, replicate)
+        elif series:
+            target = series
+        return [int(x) for x in self._h5t["data/%s/time" % (target,)][:]]
+
+    def set_timeseries_data(self, name_or_index, data, series=None, replicate=None, action='add'):
+        """ Add timeseries to a data set
+        name is the feature/timeseries name (e.g., hash of the sequence)
+        index is the index in the timeseries order where the data should be inserted
+        data is the timeseries data, length of ntimepoints for the target
+        target is the dataset (series + replicate)
+        action: add or replace, if timeseries already exists
+        """
+        if (series is not None) & (replicate is not None):
+            target = "%s_%s" % (series, replicate)
+        elif (series is not None):
+            target = series
+        elif (replicate is not None):
+            target =  replicate
+        else:
+            target = "timeseries"
+
+        data_addr = "data/%s/matrix" % (target,)
+
+        if type(name_or_index) is int:
+            index = name_or_index
+        else:
+            index = self.get_timeseries_index(name_or_index)
+            if index == -1:
+                raise IndexError("Name %s not found in timeseries ids." % (name_or_index,))
+
+        if (len(data) != self._h5t[data_addr].shape[1]):
+            raise ValueError("Input data length %d does not match matrix rows, %d" 
+                              % (len(data), self._h5t[data_addr].shape[1]))
+
+        if action == 'add':
+            self._h5t[data_addr][index, :] += data
+        elif action == 'replace':
+            self._h5t[data_addr][index, :] = data
+        else:
+            raise ValueError("Unknown action '%s', valid options: add, replace" % (action,))
+
+    def _resolve_structure(self):
+        #Resolve the structure of the file, specifically: return the series:replicate scheme
+        # This helps us to aggregate the replicates and link the series as appropriate
+        structure = {}
+        for dataset_name in self._h5t["data"]:
+            attrs = self._h5t["data/%s" % (dataset_name,)].attrs
+            if "replicate" in attrs:
+                replicate = attrs["replicate"]
+            else:
+                replicate = None
+            if "series" in attrs:
+                series = attrs["series"]
+            else:
+                series = dataset_name
+            if replicate is not None:
+                if series not in structure:
+                    structure[series] = ["%s_%s" % (series, replicate)]
+                else:
+                    structure[series].append("%s_%s" % (series, replicate))
+            else:
+                structure[series] = [series]
+        self.structure = structure
+
+    @lru_cache(maxsize=1028)
+    def get_timeseries_index(self, name):
+        """ Gets the index of a timeseries by its name/identifier. Getting
+            a timeseries by index is faster than getting it by its identifier,
+            so get by index whenever possible.
+
+            Calls to this method are cached to minimize repeated lookup times.
+
+            Returns -1 if the name is not found in the index list.
+        """
+        res = np.where(self._h5t["timeseries/ids"][:] == name.encode())
+        if len(res[0]) > 0:
+            return res[0][0]
+        else:
+            return -1
+
+    @lru_cache(maxsize=256)
+    def get_sample_index(self, name, replicate_id = None, return_dataset = False):
+        """ Gets the index of a sample by its name/identifier. If you have replicates
+            in your data set, the replicate ID must be provided.
+
+            If return_dataset is True, it will return a tuple including the name of the
+            dataset as the first item and the index as the second. If return_dataset is 
+            false, it will only return the index.
+        """
+        if replicate_id is not None:
+            name = name + "_" + str(replicate_id)
+        for dataset in self._h5t["data"]:
+            names = self._h5t["data/" + dataset + "/names"][:]
+            res = np.where(names == name.encode())
+            if len(res[0]) > 0:
+                if return_dataset:
+                    return (str(dataset), res[0][0])
+                else:
+                    return res[0][0]
+        #If not found, give -1
+        if return_dataset:
+            return (None, -1)
+        else:
+            return -1
+
+    def filter_data(self, filter_method = 'min_sample_presence', threshold = 2):
+        #TODO: Update this to go through each of the datasets rather than just the single time-series default
+        #TODO: Make it remove the corresponding ids and other timeseries metadata as needed
+        matrix = self._h5t["data/timeseries/matrix"]
+        #Chunks for smoother HDF5 reading
+        def chunks(N, nb):
+            step = N / nb
+            return [(round(step*i), round(step*(i+1))) for i in range(nb)]
+        nrows, ncols = matrix.shape
+        if filter_method is "min_sample_presence":
+            def filter_function(row):
+                return np.count_nonzero(row) < threshold
+        elif filter_method is "min_sample_proportion":
+            def filter_function(row):
+                return np.count_nonzero(row)/len(row) < threshold
+        else:
+            raise ValueError("Unknown filter method '%s'." % (filter_method,))
+        cursor = 0
+        #Grab big chunks for efficiency
+        for i, j in chunks(nrows, 10000):
+            rows = matrix[i:j,:]
+            for k in range(i,j):
+                if not filter_function(rows[k-i,:]):
+                    if k != cursor:
+                        matrix[cursor, :] = rows[k-i,:]
+                        cursor += 1
+        matrix.resize(size=(cursor - 1, ncols))
+
+    def _resize_data(self, nts):
+        """Resizes the arrays in the HDF5 data file to have nts timeseries
 
         Parameters
         ----------
-        version: str
-            version string, triple (major, minor, release)
-
-        Returns
-        -------
-        boolean
-            True if TimeSeriesData object is greater than provided string
+        nts: int (optional)
+            number of time-series in the data set
         """
-        if "origin_version" not in self.h5_table.attrs:
-            return False
-        origin_version = self.h5_table.attrs["origin_version"]
-        major, minor, release = origin_version.decode("ASCII").split(".")
-        comp_major, comp_minor, comp_release = version.split(".")
-        if int(major) > int(comp_major):
-            return True
-        elif int(major) == int(comp_major):
-            if int(minor) > int(comp_minor):
-                return True
-            elif int(minor) == int(comp_minor):
-                if int(release) > int(comp_release):
-                    return True
-        return False
-        
-    def resize_data(self, ngenes=None, nsamples=None, nobs=None):
-        """Resizes the arrays in the HDF5 data file. If any size parameter
-        is not provided, it is inferred from the previous data shape.
+        for dataset_name in self._h5t["data"]:
+            dataset = self._h5t["data/" + dataset_name + "/matrix"]
+            dataset.resize((nts, dataset.shape[1]))
+        for dataset_name in self._h5t["timeseries"]:
+            shape = list(self._h5t["timeseries/" + dataset_name].shape)
+            shape[0] = nts
+            self._h5t["timeseries/" + dataset_name].resize(shape)
 
-        Parameters
-        ----------
-        ngenes: int (optional)
-            number of genes/time-series in the data set
-        nsamples: int (optional)
-            number of samples/time-points in the data set
-        nobs: int (optional)
-            number of non-zero observations in the data set
-        """
-        #If any of the parameters are not set, try to infer them
-        if (ngenes == None):
-            ngenes = self.h5_table["timeseries/indptr"].shape[0] - 1
-        if (nsamples == None):
-            nsamples = self.h5_table["samples/time"].shape[0]
-        if (nobs == None):
-            nobs = self.h5_table["timeseries/data"].shape[0]
-        #Note: if this shrinks the data, it will truncate it
-        self.h5_table["timeseries/data"].resize((nobs,))
-        self.h5_table["timeseries/indices"].resize((nobs, ))
-        self.h5_table["timeseries/indptr"].resize((ngenes + 1, ))
-        self.h5_table["genes/sequences"].resize((ngenes, ))
-        self.h5_table["genes/sequenceids"].resize((ngenes, ))
-        self.h5_table["genes/clusters"].resize((ngenes, 20))
-        self.h5_table["genes/taxonomy"].resize((ngenes, ))
-        self.h5_table["genes/sequenceclusters"].resize((ngenes, ))
-        self.h5_table["samples/names"].resize((nsamples, ))
-        self.h5_table["samples/time"].resize((nsamples, ))
-        self.h5_table["samples/metadata"].resize((nsamples, ))
-        if self.version_greater_than("0.1.0"):
-            self.h5_table["samples/mask"].resize((nsamples, ))
-        self.fill_array("genes/taxonomy", b"NF")
-        self.fill_array("genes/sequenceclusters", b"NF")
+# Vestigial Stuff that may need to be ported into AnankeDB
 
-    def fill_array(self, target, value, chunk_size = 1000):
-        """Fill the target HDF5 array with a single value. Useful for 
-        initializing an array, since the rhdf5 package tends to segfault if you
-        load an uninitialized data set.
+class TimeSeriesData(object):
+    """Class that represents an HDF5 data file on disk that contains Ananke
+       time-series information, including the time-series for each sequence
+       (as a sparse matrix), the sequence/gene metadata, and the 
+       sample/timepoint metadata.
 
-        Parameters
-        ----------
-        target: str
-            the location of the HDF5 array, e.g., "samples/time"
-        value: any
-            the value to fill the array with
-        chunk_size: int
-            the number of items to insert at a time. This only needs to be
-            increased for very large data sets.
-        """
-        n = self.h5_table[target].shape[0]
-        chunks = np.append(np.arange(0, n, chunk_size), n)
-        for i in range(len(chunks)-1):
-            self.h5_table[target][chunks[i]:chunks[i+1]] = (
-                                            [value]*(chunks[i+1] - chunks[i]) )
-
-    def add_timeseries_data(self, data, indices, indptr, sequences):
-        """Adds, in chunks, the time-series data in compressed sparse row (csr)
-        format. This can be invoked multiple times as the data are tabulated,
-        so that the entire csr matrix never has to be in RAM all at once. The
-        matrix is inserted row-wise.
-    
-        Parameters
-        ----------
-        data: list of numeric
-            a list of the non-zero observations in the csr matrix
-        indices: list of int
-            a list of the column/sample indexes that correspond to the entries 
-            in the 'data' array
-        indptr: list of int
-            a list of the positions in the data and indices lists that
-            indicates the start of each row
-        sequences: list of str
-            a list of the sequence IDs (i.e., hashes) that correspond to each
-            row
-        """
-        #TODO: Check that incoming data size are compatible with
-        # HDF5 dataset size
-        if not self.filled_data:
-            self._ts_data_index = 0
-            self._ts_indptr_index = 0
-            self.filled_data = True
-            data_size = self.h5_table["timeseries/data"].shape[0]
-            self.h5_table["timeseries/indptr"][-1] = data_size
-        self.h5_table["timeseries/data"][
-                      self._ts_data_index:self._ts_data_index + len(data)
-                     ] = data
-        self.h5_table["timeseries/indices"][
-                      self._ts_data_index:self._ts_data_index + len(indices)
-                     ] = indices
-        self.h5_table["timeseries/indptr"][
-                      self._ts_indptr_index:self._ts_indptr_index + len(indptr)
-                     ] = indptr
-        b_sequences = [str(x).encode() for x in sequences]
-        self.h5_table["genes/sequenceids"][
-                      self._ts_indptr_index:self._ts_indptr_index + 
-                      len(sequences) ] = b_sequences
-        self._ts_data_index += len(data)
-        self._ts_indptr_index += len(indptr)
+       Contains methods for manipulating and validating Ananke data files.
+    """
 
     def add_taxonomy_data(self, input_filename):
         """Takes in a tab-separated file where the first column is the sequence
@@ -253,14 +375,14 @@ class TimeSeriesData(object):
             for line in in_file:
                 line = line.split("\t")
                 sequence_to_tax[line[0].encode()] = line[1].strip()
-        tax_list = np.empty(shape=self.h5_table["genes/sequenceids"].shape, 
+        tax_list = np.empty(shape=self._h5t["timeseries/ids"].shape, 
                             dtype=object)
-        for i, sequence_id in enumerate(self.h5_table["genes/sequenceids"]):
+        for i, sequence_id in enumerate(self._h5t["timeseries/ids"]):
             try:
                 tax_list[i] = sequence_to_tax[sequence_id]
             except KeyError:
                 tax_list[i] = "NF"
-        self.insert_array_by_chunks('genes/taxonomy', tax_list)
+        self.insert_array_by_chunks('timeseries/taxonomy', tax_list)
             
 
     def add_sequencecluster_data(self, input_filename):
@@ -282,27 +404,14 @@ class TimeSeriesData(object):
                 for sequence in line:
                     sequence = sequence.strip().encode()
                     sequence_to_cluster[sequence] = cluster_num
-        cluster_list = np.empty(shape=self.h5_table["genes/sequenceids"].shape,
+        cluster_list = np.empty(shape=self._h5t["timeseries/ids"].shape,
                                 dtype=object)
-        for i, sequence_id in enumerate(self.h5_table["genes/sequenceids"][:]):
+        for i, sequence_id in enumerate(self._h5t["timeseries/ids"][:]):
             try:
                 cluster_list[i] = sequence_to_cluster[sequence_id]
             except KeyError:
                 cluster_list[i] = "NF"
-        self.insert_array_by_chunks('genes/sequenceclusters', cluster_list)
-
-    def get_epsilon_index(self, epsilon):
-        cluster_attrs = self.h5_table["genes/clusters"].attrs
-        p_min = cluster_attrs["param_min"]
-        p_max = cluster_attrs["param_max"]
-        p_step = cluster_attrs["param_step"]
-        p_index = int(round((epsilon - p_min) / p_step))
-        return p_index 
-
-    def insert_cluster(self, indices, cluster_num, epsilon):
-        p_index = self.get_epsilon_index(epsilon)
-        indices = np.sort(np.unique(indices))
-        self.h5_table["genes/clusters"][indices, p_index] = str(cluster_num)
+        self.insert_array_by_chunks('timeseries/altclusters', cluster_list)
 
     def insert_array_by_chunks(self, target, array, 
                                transform_func = lambda x: str(x).encode(),
@@ -324,17 +433,17 @@ class TimeSeriesData(object):
             the number of items from array to insert at one time. Default is
             1000.
         """
-        n = self.h5_table[target].shape[0]
+        n = self._h5t[target].shape[0]
         chunks = np.append(np.arange(0, n, chunk_size), n)
         for i in range(len(chunks)-1):
             #  Don't overrun the source array
             #  and only fill the front of the target
             if (chunks[i+1] >= len(array)):
-                self.h5_table[target][chunks[i]:len(array)] = \
+                self._h5t[target][chunks[i]:len(array)] = \
                      [ transform_func(x) for x in array[chunks[i]:len(array)] ]
                 break
             else:
-                self.h5_table[target][chunks[i]:chunks[i+1]] = \
+                self._h5t[target][chunks[i]:chunks[i+1]] = \
                     [ transform_func(x) for x in array[chunks[i]:chunks[i+1]] ]
     
     def get_array_by_chunks(self, target, start=None, end=None, chunk_size = 1000):
@@ -357,211 +466,14 @@ class TimeSeriesData(object):
         if (start is not None) & (end is not None):
             arr_size = end - start
         else:
-            arr_size = self.h5_table[target].shape[0]
+            arr_size = self._h5t[target].shape[0]
             start = 0
             end = arr_size + 1
         arr = np.empty(arr_size,
-                       dtype=self.h5_table[target].dtype)
+                       dtype=self._h5t[target].dtype)
         chunks = list(range(start, end, chunk_size))
         if chunks[-1] != arr.shape[0]:
             chunks = chunks + [arr.shape[0]]
         for i,j in zip(chunks[0:-1], chunks[1:]):
-            arr[i:j] = self.h5_table[target][i:j]
+            arr[i:j] = self._h5t[target][i:j]
         return arr
-        
-    def get_sparse_matrix(self, chunk_size = 1000):
-        """Fetches the time-series data matrix in compressed sparse row (csr)
-        format. Does this in chunks to prevent memory usage issues.
-    
-        Parameters
-        ----------
-        chunk_size: int
-            the number of items to fetch at one time. Default is 1000.
-    
-        Returns
-        -------
-        scipy.sparse.csr_matrix
-            csr matrix object containing sequences/time-series as rows, samples
-            /time-points as columns
-        """
-        data = np.empty(self.h5_table["timeseries/data"].shape)
-        indices = np.empty(self.h5_table["timeseries/indices"].shape)
-        indptr = np.empty(self.h5_table["timeseries/indptr"].shape)       
-        chunks = list(range(0, data.shape[0], chunk_size))
-        if chunks[-1] != data.shape[0]:
-            chunks = chunks + [data.shape[0]]
-        for i,j in zip(chunks[0:-1], chunks[1:]):
-            self.h5_table["timeseries/data"].read_direct(data, np.s_[i:j],
-                                                               np.s_[i:j])       
-        chunks = list(range(0, indices.shape[0], chunk_size))
-        if chunks[-1] != indices.shape[0]:
-            chunks = chunks + [indices.shape[0]]
-        for i,j in zip(chunks[0:-1], chunks[1:]):
-            self.h5_table["timeseries/indices"].read_direct(indices,
-                                                            np.s_[i:j],
-                                                            np.s_[i:j])       
-        chunks = list(range(0, indptr.shape[0], chunk_size))
-        if chunks[-1] != indptr.shape[0]:
-            chunks = chunks + [indptr.shape[0]]
-        for i,j in zip(chunks[0:-1], chunks[1:]):
-            self.h5_table["timeseries/indptr"].read_direct(indptr,
-                                                           np.s_[i:j],
-                                                           np.s_[i:j])
-        return csr_matrix((data, indices, indptr))
-        
-    def get_mask(self):
-        """Fetches the mask values that indicate which time-series a sample
-        belongs to, if there are multiple time-series present.
-    
-        Returns
-        -------
-        list of x: list of values with a unique value for each time-series
-        """
-        if self.version_greater_than("0.1.0"):
-            return self.h5_table["samples/mask"][:]
-        else:
-            #We didn't support multi time-series, so return a dummy mask
-            return [1]*len(self.h5_table["samples/names"])
-
-    def get_cluster_labels(self, i):
-        """Fetches the time-series clusters at a given epsilon parameter index
-    
-        Parameters
-        ----------
-        i: int
-            index of interest for the desired clustering parameter epsilon
-    
-        Returns
-        -------
-        list of int: list of time-series cluster IDs
-        """
-        return self.h5_table["genes/clusters"][:,i]
-
-    def filter_data(self, outfile, filter_type='presence', threshold=0.1):
-        """Creates a new HDF5 file containing a subset of the data that match
-        the filter criterion. This is used to reduce large data sets so that
-        fewer time series are included, which can help with computation 
-        efficiency downstream.
-    
-        Parameters:
-        -----------
-        outfile: str
-            location of new HDF5 data file. This will be created.
-        filter_type: str
-            one of "proportion", "abundance", or "presence". This affects the
-            interpretation of the threshold parameter. For "proportion", a 
-            sequence must contain threshold % of the data. For "abundance", a
-            sequence must have been recorded at least threshold times. For 
-            "presence", a sequence must have been present (>0 abundance) in at 
-            least threshold % of time points.
-        threshold: float
-            the cut-off for the filter, the meaning of this changes depending
-            on filter_type.
-        """
-        #New data structures
-        filtered_data = []
-        filtered_indices = []
-        #Starts off with 0 as the starting index
-        filtered_indptr = [0]
-        filtered_sequences = []
-        row_data = None
-
-        print("Loading unfiltered data...")
-        #Get the existing data matrix
-        sparse_matrix = self.get_sparse_matrix()
-        nrows = sparse_matrix.shape[0]
-        #Coerce to float to ensure division doesn't implicitly round
-        ncols = float(sparse_matrix.shape[1])
-        threshold = float(threshold)
-
-        #Pre-compute this value and store it
-        if filter_type == 'proportion':
-            total_sum = float(sparse_matrix.sum())
-
-        print("Filtering genes by method '%s' using threshold: %f" % \
-                                                  (filter_type, threshold))
-        for row_index in range(0, nrows):
-            add_data = False
-            row_data = sparse_matrix[row_index,:]
-            if filter_type == 'proportion':
-                if row_data.sum()/total_sum > threshold:
-                    add_data = True
-            elif filter_type == 'abundance':
-                if row_data.sum() >= threshold:
-                    add_data = True
-            elif filter_type == 'presence':
-                presence_proportion = row_data.nnz/ncols
-                if presence_proportion >= threshold:
-                    add_data = True
-
-            if add_data:
-                filtered_sequences.append(
-                                 self.h5_table["genes/sequenceids"][row_index]
-                                         )
-                filtered_data.extend(row_data.data)
-                filtered_indptr.append(len(filtered_data))
-                filtered_indices.extend(row_data.indices)
-
-        # Raise error is there's no data left
-        if len(filtered_data) == 0:
-            raise ValueError("Warning: All data filtered. " \
-                             "Consider relaxing filter criterion.")
-
-        print("Writing to output file %s" % (outfile,))
-        filtered_tsdb = TimeSeriesData(outfile)
-        ngenes = len(filtered_indptr) - 1
-        nsamples = ncols
-        nobs = len(filtered_data)
-        sample_name_array = self.get_array_by_chunks("samples/names")
-        time_points = self.get_array_by_chunks("samples/time")
-        mask = self.get_mask()
-
-        # Check for columns with zero counts
-        # This can be done by checking the indices array
-        col_range = np.arange(0, ncols)
-        missing_indices = np.setdiff1d(col_range, filtered_indices)
-        missing_indices = [ int(x) for x in missing_indices ]
-        nsamples = nsamples - len(missing_indices)
-        if len(missing_indices) > 0:
-            missing_samples = sample_name_array[missing_indices]
-            warnings.warn("Samples missing after filtering: %s" % 
-                          str(missing_samples))
-            # Invert the missing indices to get the kept indices
-            keep_cols = ~np.in1d(col_range, missing_indices)
-            sample_name_array = sample_name_array[keep_cols]
-            time_points = time_points[keep_cols]
-            mask = mask[keep_cols]
-
-        filtered_tsdb.resize_data(ngenes, nsamples, nobs)
-        filtered_tsdb.insert_array_by_chunks("samples/names", 
-                                             sample_name_array,
-                                             transform_func = lambda x: x)
-        
-        filtered_tsdb.insert_array_by_chunks("samples/time",
-                                             time_points,
-                                             transform_func = float)
-        
-        filtered_tsdb.insert_array_by_chunks("samples/mask",
-                                             mask,
-                                             transform_func = lambda x: x)
-        
-        # We only need to modify the indices array to remove empty cols
-        # Reduce the indexes higher than the missing ones by 1
-        filtered_indices = np.array(filtered_indices)
-        for ind in missing_indices:
-            filtered_indices[np.where(filtered_indices > ind)] = \
-            filtered_indices[np.where(filtered_indices > ind)] - 1
-    
-        # Put into HDF5 file by chunks for memory reasons
-        filtered_tsdb.insert_array_by_chunks("timeseries/data",
-                                             filtered_data,
-                                             transform_func = np.int32)
-        filtered_tsdb.insert_array_by_chunks("timeseries/indptr",
-                                             filtered_indptr,
-                                             transform_func = np.int32)
-        filtered_tsdb.insert_array_by_chunks("timeseries/indices",
-                                             filtered_indices,
-                                             transform_func = np.int32)
-        filtered_tsdb.insert_array_by_chunks("genes/sequenceids",
-                                             filtered_sequences,
-                                             transform_func = lambda x: x)
