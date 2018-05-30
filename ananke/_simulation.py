@@ -13,7 +13,9 @@ def score_simulation(anankedb, dbloomscan, true_signal_file, distance_measure, o
     attrs = anankedb._h5t.attrs
     if "simulation" not in attrs:
         raise ValueError("This AnankeDB file was not the result of a simulation trial. It cannot be scored.")
-    dist = distance_function(distance_measure, time_points = anankedb.get_timepoints())
+    time_points = anankedb.get_timepoints()
+    ntp = len(time_points)
+    dist = distance_function(distance_measure, time_points = time_points)
     data_matrix = dist.transform_matrix(anankedb._h5t["data/timeseries/matrix"])
     true_signal = np.loadtxt(true_signal_file)
     transformed_signal = dist.transform_matrix(true_signal)
@@ -52,7 +54,7 @@ def score_simulation(anankedb, dbloomscan, true_signal_file, distance_measure, o
     best = {}
     for cluster_id, score_list in scores.items():
         best[cluster_id] = max(score_list)
-    output_row = [distance_measure, nclust, nts_per_clust, nsr, signal_variance, shift_amount]
+    output_row = [distance_measure, ntp, nclust, nts_per_clust, nsr, signal_variance, shift_amount]
     output_row.extend(best.values())
     output_file.write("\t".join([str(x) for x in output_row]))
     output_file.write("\n")
