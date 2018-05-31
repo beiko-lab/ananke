@@ -215,7 +215,7 @@ class BloomGarden(object):
                     #We can skip the check because each pair we check is unique
                     self.blooms[name].add_hashes(hashes, skip_check=True)
                 except IndexError:
-                    print("Bloom filter '%s' hit capacity, closing" % (str(name),))
+                    #print("Bloom filter '%s' hit capacity, closing" % (str(name),))
                     prune_list.append(name)
                     pruned_blooms += 1
         for bloom in prune_list:
