@@ -73,14 +73,14 @@ def save_blooms(anankedb, dbloomscan):
         if float(bloom_id) not in dbloomscan.bloom_garden.blooms.keys():
             del bfs[bloom_id]
         
-def load_blooms(anankedb, distance_measure="sts", in_memory=True):
+def load_blooms(anankedb, distance_measure="sts", norm_ord=None, in_memory=True):
     time_points = anankedb.get_timepoints()
     dist = distance_function(distance_measure, time_points=time_points)
     if "bloomfilters" not in anankedb._h5t:
         raise IndexError("No bloom filters to load.")
     bfs = anankedb._h5t["bloomfilters"]
     attrs = bfs.attrs
-    data_fetcher = data_fetcher_factory(anankedb, dist, in_memory)
+    data_fetcher = data_fetcher_factory(anankedb, dist, norm_ord, in_memory)
     dist_range = sorted([float(bloom_id) for bloom_id in anankedb._h5t["bloomfilters"]])
     dbloomscan = DBloomSCAN(anankedb.nts, dist.distance,
                             data_fetcher, dist_range, max_dist = attrs["max_dist"])
@@ -93,7 +93,7 @@ def load_blooms(anankedb, distance_measure="sts", in_memory=True):
         dbloomscan.bloom_garden.blooms[float(bloom_id)] = new_bloom
     return dbloomscan
 
-def data_fetcher_factory(anankedb, tsdist, in_memory=True):
+def data_fetcher_factory(anankedb, tsdist, norm_ord=None, in_memory=True):
     # Hopefully once the data_fetcher is returned, the garbage collector
     # lets this hang around...
     if in_memory:
@@ -101,19 +101,22 @@ def data_fetcher_factory(anankedb, tsdist, in_memory=True):
         anankedb._h5t["data/timeseries/matrix"].read_direct(data_matrix)
         data_matrix = tsdist.transform_matrix(data_matrix)
         def data_fetcher(index):
-            return data_matrix[index,:]/sum(data_matrix[index,:])
+            data = data_matrix[index,:]
+            norm = np.linalg.norm(data, ord=norm_ord)
+            return data/norm
     else:
         data_matrix = anankedb._h5t["data/timeseries/matrix"]
         def data_fetcher(index):
             data = tsdist.transform_row(data_matrix[index,:])
-            return data/sum(data)
+            norm = np.linalg.norm(data, ord=norm_ord)
+            return data/norm
     return data_fetcher
 
-def precompute_distances(anankedb, distance_measure, dist_range, in_memory=True):
+def precompute_distances(anankedb, distance_measure, dist_range, norm_ord = None, in_memory=True):
     capacity = anankedb.nts
     time_points = anankedb.get_timepoints()
     dist = distance_function(distance_measure, time_points=time_points)
-    data_fetcher = data_fetcher_factory(anankedb, dist, in_memory) 
+    data_fetcher = data_fetcher_factory(anankedb, dist, norm_ord, in_memory) 
     dbloomscan = DBloomSCAN(capacity, dist.distance,
                             data_fetcher, dist_range)
     dbloomscan.compute_distances()
