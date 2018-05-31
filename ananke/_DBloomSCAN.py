@@ -17,13 +17,16 @@ global_data_matrix = np.empty(shape=(1,1))
 
 class DBloomSCAN(object):
     def __init__(self, n_objects, distance_computer, data_fetcher, 
-                 dist_range=np.arange(0.0001,0.201,0.0001)):
+                 dist_range=np.arange(0.0001,0.201,0.0001), max_dist=None):
         self.n_objects = n_objects
         self.compute_distance = distance_computer
         self.fetch_data = data_fetcher
         self.dist_range = np.array([round(x, 5) for x in dist_range])
         self.bloom_garden = BloomGarden(self.dist_range, 20 * self.n_objects)
-        self.max_dist = self._sample_distances()
+        if max_dist is None:
+            self.max_dist = self._sample_distances()
+        else:
+            self.max_dist = max_dist
         self._computed = 0
 
     def set_data_source(self, data):
