@@ -1,14 +1,16 @@
+import pandas as pd
 import numpy as np
+import arrow
 import random
 from ._database import AnankeDB
 
 # This file contains the initializers that shuttle data into Ananke files/objects
 
 # TODO: Update to accept lists of length nseries for timepoints
-def initialize_by_shape(anankedb, ntimepoints = 180, timepoints = None, nseries = 1, nreplicates = 1):
+def initialize_by_shape(anankedb, ntimepoints = 180, timepoints = None, nseries = 1, nreplicates = 1, maxtimepoint = 365):
     names = []
     if timepoints is None:
-        timepoints = np.array(np.cumsum([random.randint(1,15) for i in range(ntimepoints)]))
+        timepoints = sorted(np.random.choice(np.arange(maxtimepoint),ntimepoints,replace=False))
     for i in np.arange(nseries):
         for j in np.arange(nreplicates):
             if nseries > 1:
@@ -100,8 +102,8 @@ def initialize_from_metadata(anankedb, metadata_path, name_col,
                        series_subset[replicate_col] == replicate, time_col]
                 name = str(series) + "_" + str(replicate)
                 sample_names = series_subset[name_col]
-                self.create_series(name, time, sample_names)
-                attrs = self._h5t["data/" + name].attrs
+                anankedb.create_series(name, time, sample_names)
+                attrs = anankedb._h5t["data/" + name].attrs
                 attrs.create("replicate", replicate.encode(),
                              dtype=h5.special_dtype(vlen=bytes))
                 attrs.create("series", series.encode(),
@@ -114,16 +116,16 @@ def initialize_from_metadata(anankedb, metadata_path, name_col,
             time = np.array(subset[time_col], dtype=str)
             name = str(rep_or_series)
             sample_names = subset[name_col]
-            self.create_series(name, time, sample_names)
+            anankedb.create_series(name, time, sample_names)
         if replicate_col is not None:
             att_str = "replicate"
         else:
             att_str = "series"
 
-            self._h5t["data/" + name].attrs.create(att_str, name.encode(),
+            anankedb._h5t["data/" + name].attrs.create(att_str, name.encode(),
                           dtype=h5.special_dtype(vlen=bytes))
     else:
         #We only have one to deal with
         time = mm[time_col]
         sample_names = mm[name_col]
-        self.create_series("timeseries", time, sample_names)
+        anankedb.create_series("timeseries", time, sample_names)

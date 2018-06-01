@@ -61,14 +61,14 @@ def score_simulation(anankedb, dbloomscan, true_signal_file, distance_measure, o
     return best
 
 def simulate_and_import(anankedb, nclust, nts_per_clust, nsr, shift_amount, signal_variance):
-    nsamples = anankedb._h5t["data/timeseries/matrix"].shape[1]
+    time_points = anankedb.get_timepoints()
     nnoise = int(nsr*nclust*nts_per_clust)
-    sim = gen_table(fl_sig=0, w_sig=6,
+    sim = gen_table(time_points, shift_amount, 
+                    fl_sig=0, w_sig=6,
                     fl_bg=-6, w_bg=6,
                     bg_disp_mu=0, bg_disp_sigma=1,
                     sig_disp_mu2=0, sig_disp_sigma2=signal_variance,
-                    n_clust=nclust, n_sig=nts_per_clust, n_tax_sig=1, n_bg=nnoise,
-                    len_arima=2*nsamples, len_ts=nsamples, len_signal=nsamples-shift_amount)
+                    n_clust=nclust, n_sig=nts_per_clust, n_tax_sig=1, n_bg=nnoise)
     X = sim['table']
     Y = sim['signals']
 
@@ -108,23 +108,29 @@ def gen_arima(n, a, b):
     '''
     
     arparams = np.random.uniform(0.97,0.99,1)
-    maparams = np.random.uniform(0.00,0.99,1)
+    maparams = np.random.uniform(1,6,1)
     
     y = None
     while y is None:
         try:
-            y = arma_generate_sample(arparams, maparams, n)
+            y = arma_generate_sample(arparams, maparams, n, sigma=0.05)
         except:
             pass
     
     return normab(y, a, b)
 
-def gen_table(fl_sig=0,w_sig=6,
+def gen_random_walk(n, a, b):
+    x = w = np.random.normal(size=n)
+    for t in range(n):
+        x[t] = x[t-1] + w[t]
+    return normab(x, a, b)
+
+def gen_table(time_points, shift_amount=0,
+              fl_sig=0,w_sig=6,
               fl_bg=-6,w_bg=6,
               bg_disp_mu=0,bg_disp_sigma=1,
               sig_disp_mu2=0,sig_disp_sigma2=1,
-              n_clust=10,n_sig=10,n_tax_sig=1,n_bg=700,
-              len_arima=1000,len_ts=500,len_signal=300):
+              n_clust=10,n_sig=10,n_tax_sig=1,n_bg=700):
     '''
     generate simulated time series 
     Arguments:
@@ -148,10 +154,14 @@ def gen_table(fl_sig=0,w_sig=6,
     out  -- scaled and normalized arima signal, a dictionary where
         out['table'] -- final simulated time series, numpy array of shape ( n_clust*n_sig*n_tax_sig+n_bg, len_ts )
     '''
+    # If no specific sample points are indicated, make it even sampling
+    len_ts = len(time_points)
+    len_arima = time_points[-1] + shift_amount + 1
+
     # optional input sig_disp_mu1=0,sig_disp_sigma1=0
-    idx_signal = range((len_ts - len_signal//2),(len_ts + len_signal//2 - 1))
-    min_ts = max(idx_signal) - len_ts + 1
-    max_ts = min(idx_signal)
+   # idx_signal = range((len_ts - len_signal//2),(len_ts + len_signal//2 - 1))
+   # min_ts = max(idx_signal) - len_ts + 1
+   # max_ts = min(idx_signal)
     mu_bg = normab(np.random.normal(0, 1, len_ts*n_bg),fl_bg,w_bg)
     bg_disp = np.random.normal(bg_disp_mu, bg_disp_sigma, len_ts*n_bg)
     bg_lambda = np.exp(mu_bg + bg_disp)
@@ -159,11 +169,13 @@ def gen_table(fl_sig=0,w_sig=6,
     background = np.reshape(np.random.poisson(bg_lambda,len(bg_lambda)),(len_ts,n_bg),order='F')
     
     dat = []
+    # Each of these k represents a taxon and gets its own underlying process
     for k in range(n_clust):
 
         cluster_out = {}
-
-        timeseries_pure = gen_arima(len_arima,fl_sig,w_sig)
+        # The basis time series. This is the "underlying process".
+#        timeseries_pure = gen_arima(len_arima,fl_sig,w_sig)
+        timeseries_pure = gen_random_walk(len_arima, fl_sig, w_sig)
 #         timeseries_noise1 = np.random.normal(sig_disp_mu1,sig_disp_sigma1,len(timeseries_pure))
 
         timeseries_lambda = []
@@ -175,15 +187,14 @@ def gen_table(fl_sig=0,w_sig=6,
             timeseries_lambda.append(theta)
         timeseries = np.random.poisson(timeseries_lambda,len(timeseries_lambda))
 
-        timesteps = []
-        for i in range(n_sig):
-            ts_start = np.random.randint(min_ts, max_ts)
-            timesteps.append(list(range(ts_start,ts_start+len_ts)))
-
         cluster = []
         pure_sig = []
+        # This is the number of TS generated per cluster
+        # They have additional random noise and may be shifted
         for i in range(n_sig):
-            y_tmp = timeseries[timesteps[i]]
+            # Determines the phase of the process
+            ts_start = np.random.randint(0, shift_amount+1)
+            y_tmp = timeseries[np.array(time_points) + ts_start]
             cluster_tmp = []
             for mu in y_tmp:
                 if sig_disp_sigma2 == 0:
@@ -199,7 +210,7 @@ def gen_table(fl_sig=0,w_sig=6,
         cluster_out['timeseries_pure'] = pure_sig
         cluster_out['timeseries'] = timeseries
         cluster_out['cluster'] = cluster
-        cluster_out['timesteps'] = timesteps
+#        cluster_out['timesteps'] = timesteps
 
         dat.append(cluster_out)
         
