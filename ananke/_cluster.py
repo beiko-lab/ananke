@@ -5,7 +5,7 @@ from bitarray import bitarray
 import numpy as np
 from zlib import compress, decompress
 
-def find_nearest_timeseries(anankedb, query_data, tsdist, n_threads = 1, n_chunks = 100, in_memory=True):
+def find_nearest_timeseries(anankedb, query_data, tsdist, norm_ord = None, n_chunks = 100, in_memory=True):
     if in_memory:
         data_matrix = np.empty(anankedb._h5t["data/timeseries/matrix"].shape)
         anankedb._h5t["data/timeseries/matrix"].read_direct(data_matrix)
@@ -14,7 +14,7 @@ def find_nearest_timeseries(anankedb, query_data, tsdist, n_threads = 1, n_chunk
         data_matrix = tsdist.transform_matrix(data_matrix)
     else:
         data_matrix = anankedb._h5t["data/timeseries/matrix"]
-    query_data = query_data/sum(query_data)
+    query_data = query_data/np.linalg.norm(query_data, ord=norm_ord)
     min_distance = np.inf
     min_index = None
     # Break the data_matrix into chunks in case the source is on disk
@@ -30,7 +30,8 @@ def find_nearest_timeseries(anankedb, query_data, tsdist, n_threads = 1, n_chunk
             #transform, so this has to be done here
             else:
                 row = tsdist.transform_row(data[k-i, :])
-            distance = tsdist.distance(query_data, row/sum(row))
+            norm = np.linalg.norm(row, ord=norm_ord)
+            distance = tsdist.distance(query_data, row/norm)
             if distance < min_distance:
                 min_distance = distance
                 min_index = k
