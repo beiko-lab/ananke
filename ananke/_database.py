@@ -91,15 +91,6 @@ class AnankeDB(object):
             self._h5t["timeseries"].create_dataset("ids", shape=(0,), 
                                    dtype=h5.special_dtype(vlen=bytes), 
                                    maxshape=(None,))
-            self._h5t["timeseries"].create_dataset("clusters", shape=(0,0), 
-                                   dtype=np.int16, 
-                                   maxshape=(None,None), fillvalue=-2)
-            self._h5t["timeseries"].create_dataset("taxonomy", shape=(0,), 
-                                   dtype=h5.special_dtype(vlen=bytes), 
-                                   maxshape=(None,))
-            self._h5t["timeseries"].create_dataset("altclusters", shape=(0,), 
-                                   dtype=h5.special_dtype(vlen=bytes),
-                                   maxshape=(None,))
 
     def __del__(self):
         """Destructor for Ananke object
@@ -306,6 +297,7 @@ class AnankeDB(object):
         #TODO: Update this to go through each of the datasets rather than just the single time-series default
         #TODO: Make it remove the corresponding ids and other timeseries metadata as needed
         matrix = self._h5t["data/timeseries/matrix"]
+        ts_ids = self._h5t["timeseries/ids"]
         #Chunks for smoother HDF5 reading
         def chunks(N, nb):
             step = N / nb
@@ -327,8 +319,11 @@ class AnankeDB(object):
                 if not filter_function(rows[k-i,:]):
                     if k != cursor:
                         matrix[cursor, :] = rows[k-i,:]
+                        ts_ids[cursor] = ts_ids[k-i]
                         cursor += 1
         matrix.resize(size=(cursor - 1, ncols))
+        ts_ids.resize(size=(cursor - 1,))
+        self.nts = cursor - 1
 
     def _resize_data(self, nts):
         """Resizes the arrays in the HDF5 data file to have nts timeseries
