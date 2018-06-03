@@ -22,11 +22,11 @@ class CountAccumulator(object):
        HDF5 file. Allows the HDF5 file to be incrementally built up. Will add
        counts to an existing file if initialized using a file with data."""
 
-    def __init__(self, timeseriesdb, push_at = 5e6,
+    def __init__(self, anankedb, push_at = 5e6,
                  item_hash = lambda x: hashlib.md5(x).hexdigest()):
-        self.db = timeseriesdb
-        self.id_indexes = dict(zip(timeseriesdb._h5t["timeseries/ids"][:], 
-                               np.arange(0, timeseriesdb._h5t["timeseries/ids"].shape[0])))
+        self.db = anankedb
+        self.id_indexes = dict(zip(self.db._h5t["timeseries/ids"][:], 
+                               np.arange(0, self.db._h5t["timeseries/ids"].shape[0])))
         self.limit = push_at
         # Holds the counts in a dictionary in {"dataset_name": { column_index: Counter((hash, count)) }} format
         self.counts = {}
@@ -79,7 +79,6 @@ class CountAccumulator(object):
         for dataset_name, columns in self.counts.items():
             dataset = self.db._h5t["data/" + dataset_name + "/matrix"]
             for column_index, counter in columns.items():
-                print("Sorting hashes")
                 for item_hash, count in counter.items():
                     try:
                         row_index = self.id_indexes[item_hash]
@@ -106,22 +105,17 @@ class CountAccumulator(object):
                 #    dataset[r_s, column_index] = n_s
                 #    row_chunk = []
                 #    count_chunk = []
-            print("Resizing data for new features")
-            self.db.resize_data(len(self.id_indexes.keys()) + len(self.pending_ids))
-            print("Inserting pending feature IDs")
+            self.db._resize_data(len(self.id_indexes.keys()) + len(self.pending_ids))
             self.db._h5t["timeseries/ids"][len(self.id_indexes.keys()):] = self.pending_ids
             self.id_indexes.update(zip(self.pending_ids, self.pending_rows))
             if len(self.pending_rows) > 0:
-                print("Inserting feature counts")
                 r_s, c_s, n_s = map(list, zip(*sorted(zip(self.pending_rows,
                                                           self.pending_columns,
                                                           self.pending_counts))))
-                print("Sorted")
                 r_s = np.array(r_s)
                 c_s = np.array(c_s)
                 n_s = np.array(n_s)
                 for value in np.unique(c_s):
-                    print("Inserting a column")
                     rows = r_s[np.where(c_s == value)]
                     counts = n_s[np.where(c_s == value)]
                     N = max(round(len(rows) / chunksize), 1)
@@ -134,7 +128,7 @@ class CountAccumulator(object):
                 self.pending_columns = []
                 self.pending_counts = []
 
-def fasta_to_ananke(seqf, timeseriesdb, size_labels=False, push_at=5e6):
+def fasta_to_ananke(seqf, anankedb, size_labels=False, push_at=5e6):
     """Count the unique sequences in a FASTA file, tabulating by sample.
 
     Parameters
@@ -148,7 +142,7 @@ def fasta_to_ananke(seqf, timeseriesdb, size_labels=False, push_at=5e6):
 
     """
 
-    the_count = CountAccumulator(timeseriesdb, push_at=push_at)
+    the_count = CountAccumulator(anankedb, push_at=push_at)
 
     for line in seqf:
         assert line[0] == ">", "Label line began with %s, not >. Is " \
