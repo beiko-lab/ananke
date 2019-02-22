@@ -20,12 +20,15 @@ def distance_function(distance_measure, **kwargs):
     else:
         raise ValueError("Unrecognized distance measure '%s'." % (distance_measure,))
 
+class TSDist():
+    def __init__(self, aggregate_func=sum):
+        self.aggregate_func = aggregate_func
 
 # Core distance functions
 # Each of these must take in 
-class DTW():
+class DTW(TSDist):
     def __init__(self):
-        pass
+        self.name = "DTW"
 
     def distance(self, data1, data2):
         distance, path = fastdtw(data1, data2)
@@ -37,8 +40,9 @@ class DTW():
     def transform_row(self, row):
         return row
 
-class DDTW():
+class DDTW(TSDist):
     def __init__(self, time_points):
+        self.name = "DDTW"
         self.time_points = [int(x) for x in time_points]
         self.interp_points = [int(x) + 0.05 for x in time_points]
 
@@ -57,8 +61,9 @@ class DDTW():
         return fd.interpolate_by_finite_diff(self.time_points, matrix, self.interp_points, 
                                              maxorder=1, ntail=ntail, nhead=nhead)[:,:,1].T
 
-class STS():
+class STS(TSDist):
     def __init__(self, time_points):
+        self.name = "STS"
         self.time_delta = np.array(time_points[1:]) - np.array(time_points[0:-1])
     
     def distance(self, slopes1, slopes2):
@@ -76,9 +81,9 @@ class STS():
         return (row[1:] - row[0:-1]) / self.time_delta
 
 
-class Euclidean():
+class Euclidean(TSDist):
     def __init__(self):
-        pass
+        self.name = "Euclidean"
 
     def distance(self, data1, data2):
         return np.sqrt(sum(np.square(data1-data2)))

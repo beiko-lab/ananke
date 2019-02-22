@@ -6,6 +6,7 @@ from bitarray import bitarray
 from zlib import compress
 import xxhash
 from struct import pack, unpack
+import warnings
 
 #### REFACTOR ####
 
@@ -22,7 +23,7 @@ class DBloomSCAN(object):
         self.compute_distance = distance_computer
         self.fetch_data = data_fetcher
         self.dist_range = np.array([round(x, 5) for x in dist_range])
-        self.bloom_garden = BloomGarden(self.dist_range, 20 * self.n_objects)
+        self.bloom_garden = BloomGarden(self.dist_range, 200 * self.n_objects)
         if max_dist is None:
             self.max_dist = self._sample_distances()
         else:
@@ -51,23 +52,23 @@ class DBloomSCAN(object):
         self.dist_range = self.dist_range[:pruned_blooms]
         self._computed += 1
 
-    #Take in a tuple of data series and computes the distance
-    def _compute_distance_wrapper(self, indices):
-        i, j = indices
-        data1 = self.fetch_data(i)
-        data2 = self.fetch_data(j)
-        distance = self.compute_distance(data1, data2)
-        distance = distance / self.max_dist
-        data = (i, j, distance)
-        self.add_distance(data)
-
-    def _consume_distance_wrapper(self, queue):
-        while True:
-            data = queue.get()
-            self.add_distance(data)
-            #if self._computed % 10000 == 0:
-            percent = 100*float(self._computed)/(self.n_objects*(self.n_objects-1)/2)
-            print("%0.2f%%" % (percent,), end='\r')
+#    #Take in a tuple of data series and computes the distance
+#    def _compute_distance_wrapper(self, indices):
+#        i, j = indices
+#        data1 = self.fetch_data(i)
+#        data2 = self.fetch_data(j)
+#        distance = self.compute_distance(data1, data2)
+#        distance = distance / self.max_dist
+#        data = (i, j, distance)
+#        self.add_distance(data)
+#
+#    def _consume_distance_wrapper(self, queue):
+#        while True:
+#            data = queue.get()
+#            self.add_distance(data)
+#            #if self._computed % 10000 == 0:
+#            percent = 100*float(self._computed)/(self.n_objects*(self.n_objects-1)/2)
+#            print("%0.2f%%" % (percent,), end='\r')
                 
     def _sample_distances(self):
         # Sample some distances to guess the max epsilon, used for scaling
@@ -78,6 +79,7 @@ class DBloomSCAN(object):
         # Sample twice as many distances as we have unique genes
         # TODO: Validate that this is a good enough amount of sampling
         n_iters = 2*int(nrows)
+        total_distance = 0
         for i in range(0, n_iters):
             x = randrange(0, nrows)
             y = randrange(0, nrows)
@@ -86,9 +88,10 @@ class DBloomSCAN(object):
                 break
             distance = self.compute_distance(self.fetch_data(x), 
                                              self.fetch_data(y))
+            total_distance += distance
             if distance > max_dist:
                 max_dist = distance
-
+#        return total_distance/float(n_iters)
         return max_dist
 
     def are_neighbours(self, i, j, distance, validate = True):
@@ -112,13 +115,15 @@ class DBloomSCAN(object):
                 # Return it as a positive, and put it on the caller to double check
                 return True
             
-    def DBSCAN(self, epsilon, min_pts = 2, expand_around=None):
+    def DBSCAN(self, epsilon, min_pts = 2, expand_around=None, max_members=None, warn=True):
         if epsilon not in list(self.dist_range):
             dist_range = self.dist_range
             delta = dist_range - epsilon
             old_epsilon = epsilon
             epsilon = self.dist_range[np.argmin(abs(delta))]
-            print("Bloom filter does not exist for this epsilon value, %f. Using the closest precomputed value, %f." % (old_epsilon,epsilon))
+            if warn:
+                print("Bloom filter does not exist for this epsilon value, %f. " \
+                  "Using the closest precomputed value, %f." % (old_epsilon,epsilon))
         cluster_number = 0
         clustered = set()
         cluster_assignments = {}
@@ -126,6 +131,8 @@ class DBloomSCAN(object):
             index_queue = [ expand_around ]
         else:
             index_queue = range(0, self.n_objects)
+            if max_members is not None:
+                warnings.warn("max_members ignored, only used with expand_around")
         for i in index_queue:
             if i in clustered:
                 continue
@@ -140,6 +147,10 @@ class DBloomSCAN(object):
                     if (j != k) & (j not in clustered) & \
                        (self.are_neighbours(k, j, epsilon, validate=True)):
                         neighbourhood.append(j)
+                        if (expand_around is not None) & (max_members is not None):
+                            if len(neighbourhood) + len(clustered) > max_members:
+                                raise RuntimeError("Cluster too large, aborting")
+
                 # min_pts neighbourhood size includes the point itself, so we account for that here
                 # This means k is a core point
                 if len(neighbourhood) >= min_pts - 1:
@@ -151,28 +162,27 @@ class DBloomSCAN(object):
             
     def compute_distances(self, n_threads = 1):
         # Serial solution
-        if n_threads == 1:
-            c = 0
-            for i in range(0, self.n_objects):
-                data1 =  self.fetch_data(i)
-                #TODO: Chunk this range and fetch chunks in case the source is on disk
-                for j in range(i+1, self.n_objects):
-                    data2 = self.fetch_data(j)
-                    result = self.compute_distance(data1, data2)
-                    self.add_distance((i, j, result))
-                    c += 1
-                    if c % 10000 == 0:
-                        percent = 100*float(c)/(self.n_objects*(self.n_objects-1)/2)
-                        print("%0.2f%%" % (percent,), end='\r')
-                percent = 100*float(c)/(self.n_objects*(self.n_objects-1)/2)
-                print("%0.2f%%" % (percent,), end='\r')
-        else:
-            raise NotImplementedError
+        c = 0
+        for i in range(0, self.n_objects):
+            data1 =  self.fetch_data(i)
+            #TODO: Chunk this range and fetch chunks in case the source is on disk
+            for j in range(i+1, self.n_objects):
+                data2 = self.fetch_data(j)
+                result = self.compute_distance(data1, data2)
+                result = result / self.max_dist
+                self.add_distance((i, j, result))
+                c += 1
+                if c % 10000 == 0:
+                    percent = 100*float(c)/(self.n_objects*(self.n_objects-1)/2)
+                    print("%0.2f%%" % (percent,), end='\r')
+            percent = 100*float(c)/(self.n_objects*(self.n_objects-1)/2)
+            print("%0.2f%%" % (percent,), end='\r')
+            
 
 class ExternalHashBloom(pybloom.BloomFilter):
     def __init__(self, capacity, error_rate=0.001):
         super().__init__(capacity, error_rate)
-        self.make_hashes = make_hashfuncs(self.num_slices, self.bits_per_slice)
+        #self.make_hashes = make_hashfuncs(self.num_slices, self.bits_per_slice)
 
     #Overwrite the existing add function, but remove the hash check
     def add_hashes(self, hashes, skip_check = False):

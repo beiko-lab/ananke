@@ -11,6 +11,7 @@
 #You can probably safely leave this
 export HDF5_USE_FILE_LOCKING=FALSE
 SIMFILE=simulation_list.csv
+SGE_TASK_ID=30
 SIMULATIONID=$(awk "(NR==$SGE_TASK_ID){print}" $SIMFILE | cut -d , -f 1)
 NCLUST=$(awk "(NR==$SGE_TASK_ID){print}" $SIMFILE | cut -d , -f 2)
 NTSPERCLUST=$(awk "(NR==$SGE_TASK_ID){print}" $SIMFILE | cut -d , -f 3)

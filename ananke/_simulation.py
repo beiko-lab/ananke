@@ -61,7 +61,8 @@ def score_simulation(anankedb, dbloomscan, true_signal_file, distance_measure, o
     return best
 
 def simulate_and_import(anankedb, nclust, nts_per_clust, nsr, shift_amount, signal_variance):
-    time_points = anankedb.get_timepoints()
+    series_name = anankedb.get_series()[0]
+    time_points = anankedb.get_timepoints(series_name)
     nnoise = int(nsr*nclust*nts_per_clust)
     sim = gen_table(time_points, shift_amount, 
                     fl_sig=0, w_sig=6,
@@ -71,10 +72,12 @@ def simulate_and_import(anankedb, nclust, nts_per_clust, nsr, shift_amount, sign
                     n_clust=nclust, n_sig=nts_per_clust, n_tax_sig=1, n_bg=nnoise)
     X = sim['table']
     Y = sim['signals']
-
-    anankedb.add_timeseries_ids(["ts%d" % (x,) for x in range(nclust*nts_per_clust+nnoise)])
-    for i, ts in enumerate(X):
-        anankedb.set_timeseries_data(i, data=X[i,:], action='replace')
+    i = 0
+    for x in range(nclust*nts_per_clust+nnoise):
+        feature_name = "ts%d" % (x,)
+        anankedb.add_feature(feature_name)
+        anankedb[feature_name, series_name] = X[i,:]
+        i+=1
     attrs = anankedb._h5t.attrs
     attrs.create("simulation", True)
     attrs.create("nclust", nclust)
@@ -155,6 +158,7 @@ def gen_table(time_points, shift_amount=0,
         out['table'] -- final simulated time series, numpy array of shape ( n_clust*n_sig*n_tax_sig+n_bg, len_ts )
     '''
     # If no specific sample points are indicated, make it even sampling
+    time_points = [int(x) for x in time_points]
     len_ts = len(time_points)
     len_arima = time_points[-1] + shift_amount + 1
 

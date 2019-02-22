@@ -4,10 +4,8 @@
 
 import argparse
 import numpy as np
-from ananke._database import AnankeDB
-from ananke._initialize import initialize_by_shape, initialize_from_metadata
+from ananke._database import Ananke
 from ananke._simulation import simulate_and_import, score_simulation
-from ananke._cluster import precompute_distances, save_blooms, load_blooms
 
 def main():
     #  Argument parsing
@@ -229,7 +227,7 @@ def main():
     elif args.action == 'cluster':
         adb = AnankeDB(args.i)
         dbs = load_blooms(adb)
-        dbs.DBSCAN(args.e, args.m)
+        print(dbs.DBSCAN(args.e, args.m))
     
 
 if __name__ == "__main__":
