@@ -44,22 +44,55 @@ class DDTW(TSDist):
     def __init__(self, time_points):
         self.name = "DDTW"
         self.time_points = [int(x) for x in time_points]
-        self.interp_points = [int(x) + 0.05 for x in time_points]
 
-    def distance(self, derivative1, derivative2):
-        # 2 = 2-norm = Euclidean distance
-        distance, path = fastdtw(derivative1, derivative2)
-        return distance
+    def diff_dist(self, x, y):
+        '''
+        Computing drivative differences between dx and dy
+        Arguments:
+            x -- dx from signal 1, numpy array of shape ( 3,  )
+            y -- dy from signal 2, numpy array of shape ( 3,  )
+        Result:
+              -- absolute difference of estimated derivatives of x, y
+        '''
+        dx = ((x[1] - x[0]) + (x[2]-x[0])/2)/2
+        dy = ((y[1] - y[0]) + (y[2]-y[0])/2)/2
+        return abs(dx-dy)
 
-    def transform_row(self, row, nhead = 5, ntail = 5):
-        return fd.interpolate_by_finite_diff(self.time_points, 
-                                             row, self.interp_points,
-                                             maxorder=1, ntail=ntail, 
-                                             nhead=nhead)[:,1]
+    def vector_dist(self, x, y):
+        dx = ((x[1:-2] - x[0:-3]) + (x[2:-1]-x[0:-3])/2)/2
+        dy = ((y[1] - y[0]) + (y[2]-y[0])/2)/2
+        return np.abs(dx-np.repeat(dy, len(dx)))
 
-    def transform_matrix(self, matrix, nhead = 5, ntail = 5):
-        return fd.interpolate_by_finite_diff(self.time_points, matrix, self.interp_points, 
-                                             maxorder=1, ntail=ntail, nhead=nhead)[:,:,1].T
+    def distance(self, signal_1, signal_2):
+        n_rows = signal_1.shape[0]-2
+        n_cols = signal_2.shape[0]-2
+        ddtw = np.empty((n_rows,n_cols))
+        # Grab the base 3 pt finite difference
+        ddtw[0,0] = self.diff_dist(signal_1[0:3], signal_2[0:3])
+        vdist = self.vector_dist(signal_1, signal_2[0:3])
+        for i in range(1, n_rows):
+            ddtw[i,0] = ddtw[i-1,0] + vdist[i-1]
+        vdist = self.vector_dist(signal_2, signal_1[0:3])
+        for j in range(1, n_cols):
+            ddtw[0,j] = ddtw[0,j-1] + vdist[j-1]
+        for i in range(1, n_rows):
+            vdist = self.vector_dist(signal_2, signal_1[i-1:i+2])
+            for j in range(1, n_cols):
+                temp = (ddtw[i-1,j-1], ddtw[i-1,j], ddtw[i,j-1])
+                if (temp[0] <= temp[1]) & (temp[0] <= temp[2]):
+                    best_idx = 0
+                elif (temp[1] <= temp[2]) & (temp[1] <= temp[0]):
+                    best_idx = 1
+                else:
+                    best_idx = 2
+                ddtw[i,j] = vdist[j-1] + temp[best_idx]
+        return ddtw[-1,-1]
+
+    def transform_row(self, row):
+        return row
+
+    def transform_matrix(self, matrix):
+        return matrix
 
 class STS(TSDist):
     def __init__(self, time_points):
