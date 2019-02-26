@@ -3,7 +3,6 @@ import numpy as np
 ### this implementation is based on fastdtw (https://github.com/slaypni/fastdtw)
 
 from fastdtw import fastdtw
-import finitediff as fd
 
 import matplotlib
 import matplotlib.pyplot as plt
