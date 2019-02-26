@@ -2,6 +2,7 @@ import h5py as h5
 import numpy as np
 import pandas as pd
 
+import gzip
 from collections import defaultdict, Counter
 from hashlib import md5
 from typing import List
@@ -366,7 +367,7 @@ class Ananke(object):
                     tax_name = title_index[self.featureids[i].decode()]
                     tax_name = ";".join(tax_name.split(";")[-2:])
                 except:
-                    tax_name = str(i)
+                    tax_name = self.featureids[i].decode()
                 dat = self.get_merged_replicates(i, series)
                 show_legend = True if series == self.get_series()[0] else False
                 colour = colour_mapper[i] if colour_mapper is not None else None 
@@ -564,20 +565,25 @@ class Ananke(object):
         i=0
         if unique_fasta:
             unique_fasta = open(unique_fasta, 'w')
-        with open(fasta_file,"r") as seqfile:
-            seq_hashes = Counter()
-            for line in seqfile:
-                sample_id = line.split("_")[-2][1:]
-                line = seqfile.readline()
-                seq_hash = md5(line.encode()).hexdigest().encode()
-                if seq_hash not in seq_hashes:
-                    if unique_fasta:
-                        unique_fasta.write(">%s\n" % (seq_hash,))
-                        unique_fasta.write(line)
-                seq_hashes[seq_hash] += 1
-                i+=1
-                if i%100000 == 0:
-                    print("Reading in sequences: %d" % (i,), end="\r")
+        if ".gz" in fasta_file:
+            seqfile = gzip.open(fasta_file, 'r')
+        else:
+            seqfile = open(fasta_file, 'r')
+        seq_hashes = Counter()
+        for line in seqfile:
+            if isinstance(line, bytes): line = line.decode()
+            sample_id = line.split("_")[-2][1:]
+            line = seqfile.readline()
+            if isinstance(line, bytes): line = line.decode()
+            seq_hash = md5(line.encode()).hexdigest().encode()
+            if seq_hash not in seq_hashes:
+                if unique_fasta:
+                    unique_fasta.write(">%s\n" % (seq_hash,))
+                    unique_fasta.write(line)
+            seq_hashes[seq_hash] += 1
+            i+=1
+            if i%100000 == 0:
+                print("Reading in sequences: %d" % (i,), end="\r")
         add_ids = [name for name, count in seq_hashes.items() if count >= min_count] 
         print("\nAdding %d unique sequences to file with a minimum count of %d" % (len(add_ids), min_count))
         self.add_features(add_ids)
@@ -586,31 +592,34 @@ class Ananke(object):
         i = 0
         skipped = 0
         count_cache = {}
-        with open(fasta_file,"r") as seqfile:
-            for line in seqfile:
-                sample_id = line.split("_")[-2][1:]
-                line = seqfile.readline()
-                seq_hash = md5(line.encode()).hexdigest().encode()
-                try:
-                    series, replicate = self.get_sample_address(sample_id)
-                except:
-                    i += 1
-                    skipped += 1
-                    continue
-                if seq_hash not in add_ids:
-                    i += 1
-                    skipped += 1
-                    continue
-                address = str(series) + "__" + str(replicate)
-                sample_index = self._get_sample_index(sample_id)
-                full_address = address + "__" + str(sample_index)
-                feature_index = self.__index__(seq_hash)
-                if full_address not in count_cache:
-                    count_cache[full_address] = np.zeros(shape=(self.nts,))
-                count_cache[full_address][feature_index] += 1
-                i+=1
-                if i%100000 == 0:
-                    print("Tallying sequences across timepoints: %d" % (i,), end="\r")
+        seqfile.seek(0)
+        for line in seqfile:
+            if isinstance(line, bytes):
+                line = line.decode()
+            sample_id = line.split("_")[-2][1:]
+            line = seqfile.readline()
+            if isinstance(line, str): line = line.encode()
+            seq_hash = md5(line).hexdigest().encode()
+            try:
+                series, replicate = self.get_sample_address(sample_id)
+            except:
+                i += 1
+                skipped += 1
+                continue
+            if seq_hash not in add_ids:
+                i += 1
+                skipped += 1
+                continue
+            address = str(series) + "__" + str(replicate)
+            sample_index = self._get_sample_index(sample_id)
+            full_address = address + "__" + str(sample_index)
+            feature_index = self.__index__(seq_hash)
+            if full_address not in count_cache:
+                count_cache[full_address] = np.zeros(shape=(self.nts,))
+            count_cache[full_address][feature_index] += 1
+            i+=1
+            if i%100000 == 0:
+                print("Tallying sequences across timepoints: %d" % (i,), end="\r")
         print("Tallying sequences across timepoints: %d" % (i,), end="\r")
         for full_address in count_cache:
             series, replicate, s_id = full_address.split("__")
