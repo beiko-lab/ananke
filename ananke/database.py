@@ -336,7 +336,7 @@ class Ananke(object):
                                               title_index, max_members) 
                 for i in dbs.dist_range]
 
-    def plot_feature_at_distance(self, dbs, featureid, epsilon, title_index={}, max_members=100):
+    def plot_feature_at_distance(self, dbs, featureid, epsilon, title_index={}, max_members=100, plot_agg=False):
         if isinstance(featureid, int):
             index = featureid
         else:
@@ -362,6 +362,8 @@ class Ananke(object):
         series_trace = []
         for series in self.get_series():
             data = []
+            if plot_agg:
+                agg = None
             for i in cluster:
                 try:
                     tax_name = title_index[self.featureids[i].decode()]
@@ -371,10 +373,21 @@ class Ananke(object):
                 dat = self.get_merged_replicates(i, series)
                 show_legend = True if series == self.get_series()[0] else False
                 colour = colour_mapper[i] if colour_mapper is not None else None 
-                data.append(Scatter(y=dat/sum(dat),
+                if not plot_agg:
+                    data.append(Scatter(y=dat/sum(dat),
                             x=self.get_timepoints(series),
                             name=str(i)+": "+tax_name, line={"color":colour}, 
-                            legendgroup="group", showlegend=show_legend))
+                            showlegend=show_legend))
+                else:
+                    if agg is None:
+                        agg = dat/sum(dat)
+                    else:
+                        agg += dat/sum(dat)
+            if plot_agg:
+                agg = agg/len(cluster)
+                data.append(Scatter(y=agg,
+                                    x=self.get_timepoints(series),
+                                    name="Mean of cluster around %d" % (index,)))
             series_trace.append(data)
         fig = tools.make_subplots(rows=len(self.get_series()), cols=1, subplot_titles=self.get_series(), print_grid=False)
         fig['layout']['legend']['x'] = 1.02
@@ -469,11 +482,13 @@ class Ananke(object):
             data_matrix = matrix_merge_func(data_matrix)
             data_matrices[series]["matrix"] = data_matrix
             
-        def data_fetcher(index):
-            data = [data_matrices[series]["matrix"][index,:] \
+        def data_fetcher(index=None, custom_query=None):
+            if custom_query:
+                data = [data_matrices[series]["distance"].transform_row(query) / np.linalg.norm(query, axis=0, ord=norm_ord)\
+                        for series, query in zip(self.get_series(), custom_query)]
+            else:
+                data = [data_matrices[series]["matrix"][index,:] \
                         for series in data_matrices]
-	# Normalization is now done above, for efficiency, leaving this in until I'm sure it works
-#            return [d/np.linalg.norm(d, ord=norm_ord) for d in data]
             return data
 
         def data_computer(ts_list1, ts_list2):
@@ -491,7 +506,17 @@ class Ananke(object):
 
     def get_nearest_timeseries(self, query, distance_measure="sts"):
         #Each series and replicate must have its own tsdist
-        pass
+        dbs = self._make_dbloomscan(distance_measure)
+        min_dist = np.inf
+        closest_idx = None
+        for i in range(0, self.nts):
+            dist = dbs.compute_distance(dbs.fetch_data(custom_query=query), 
+                                        dbs.fetch_data(i))
+            if dist < min_dist:
+                min_dist = dist
+                closest_idx = i
+        return closest_idx
+        
 
     def precompute_distances(self, distance_measure="sts",
                              distance_range=np.arange(0.1,1,0.1),

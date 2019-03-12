@@ -1,5 +1,5 @@
+from random import randint
 from ananke._distances import distance_function
-from ananke._cluster import find_nearest_timeseries
 import statsmodels.api as sm
 from statsmodels.tsa.arima_process import arma_generate_sample
 import numpy as np
@@ -8,6 +8,20 @@ from sklearn.metrics import adjusted_rand_score
 
 #seeds = 3
 #np.random.seed(seeds)
+
+def generate_uniform_schema(ntimepoints, nseries, nreplicates):
+    return { "series_" + str(x) : 
+             {"replicate_" + str(y): 
+               {"sample_" + str(z): z for z in range(0,ntimepoints)} 
+                                    for y in range(0, nreplicates)} 
+                                  for x in range(0, nseries)}
+
+def generate_random_schema(ntimepoints, nseries, nreplicates, max_jump=10):
+    return { "series_" + str(x) : 
+             {"replicate_" + str(y): 
+               {"sample_" + str(z): z for z in np.cumsum([randint(1,max_jump) for _ in range(0,ntimepoints)])} 
+                                    for y in range(0, nreplicates)} 
+                                  for x in range(0, nseries)}
 
 def score_simulation(anankedb, dbloomscan, true_signal_file, distance_measure, output_file):
     attrs = anankedb._h5t.attrs
@@ -61,23 +75,27 @@ def score_simulation(anankedb, dbloomscan, true_signal_file, distance_measure, o
     return best
 
 def simulate_and_import(anankedb, nclust, nts_per_clust, nsr, shift_amount, signal_variance):
-    series_name = anankedb.get_series()[0]
-    time_points = anankedb.get_timepoints(series_name)
     nnoise = int(nsr*nclust*nts_per_clust)
-    sim = gen_table(time_points, shift_amount, 
-                    fl_sig=0, w_sig=6,
-                    fl_bg=-6, w_bg=6,
-                    bg_disp_mu=0, bg_disp_sigma=1,
-                    sig_disp_mu2=0, sig_disp_sigma2=signal_variance,
-                    n_clust=nclust, n_sig=nts_per_clust, n_tax_sig=1, n_bg=nnoise)
-    X = sim['table']
-    Y = sim['signals']
-    i = 0
-    for x in range(nclust*nts_per_clust+nnoise):
-        feature_name = "ts%d" % (x,)
-        anankedb.add_feature(feature_name)
-        anankedb[feature_name, series_name] = X[i,:]
-        i+=1
+    series_names = anankedb.get_series()
+    anankedb.add_features(["ts%d" % (x,) for x in range(nclust*nts_per_clust+nnoise)])
+    for series_name in series_names:
+        time_points = anankedb.get_timepoints(series_name)
+        for replicate_name in anankedb.get_replicates(series_name):
+            sim = gen_table(time_points, shift_amount,
+                            fl_sig=0, w_sig=6,
+                            fl_bg=-6, w_bg=6,
+                            bg_disp_mu=0, bg_disp_sigma=1,
+                            sig_disp_mu2=0, sig_disp_sigma2=signal_variance,
+                            n_clust=nclust, n_sig=nts_per_clust, n_tax_sig=1, n_bg=nnoise)
+            X = sim['table']
+            Y = sim['signals']
+            i = 0
+            for i in range(nclust*nts_per_clust+nnoise):
+                feature_name = "ts%d" % (i,)
+                anankedb[feature_name, series_name, replicate_name] = X[i,:]
+                i+=1
+            ds = anankedb._h5t.create_dataset("simulations/%s/%s" % (series_name, replicate_name), shape=Y.shape)
+            ds.write_direct(Y)
     attrs = anankedb._h5t.attrs
     attrs.create("simulation", True)
     attrs.create("nclust", nclust)
@@ -85,7 +103,6 @@ def simulate_and_import(anankedb, nclust, nts_per_clust, nsr, shift_amount, sign
     attrs.create("nsr", nsr)
     attrs.create("shift_amount", shift_amount)
     attrs.create("signal_variance", signal_variance)
-    return Y
 
 def normab(x, a, b):
     '''
