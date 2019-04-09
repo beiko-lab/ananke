@@ -1,13 +1,95 @@
 from random import randint
 from ananke._distances import distance_function
+from ananke.database import Ananke
 import statsmodels.api as sm
 from statsmodels.tsa.arima_process import arma_generate_sample
 import numpy as np
 from scipy.stats import nbinom
-from sklearn.metrics import adjusted_rand_score
+from sklearn.base import BaseEstimator, ClassifierMixin
+import tempfile
+import os
 
 #seeds = 3
 #np.random.seed(seeds)
+
+class AnankeSimulationClassifier(BaseEstimator, ClassifierMixin):
+    """ 
+    A classifier for Ananke simulation files. This implements
+    the scikit-learn Estimator interface, allowing a gridsearch
+    and other parameter optimizations to be performed
+    """
+
+    def __init__(self, nts=30, nclust=10, nts_per_clust=10, signal_variance=1.1,
+                 max_shift=0, noise_ratio=1):
+        """
+        Creates an Ananke classifier object
+        """
+        self.nts = nts
+        self.nclust = nclust
+        self.nts_per_clust = nts_per_clust
+        self.signal_variance = signal_variance
+        self.max_shift = max_shift
+        self.noise_ratio = noise_ratio
+        self._s_file = tempfile.NamedTemporaryFile(suffix=".h5", prefix="sim_", dir=os.getcwd())
+        self._adb = Ananke(self._s_file.name)
+        self._adb.initialize(generate_random_schema(nts, 1, 1))
+        simulate_and_import(self._adb, nclust, nts_per_clust, noise_ratio, max_shift, signal_variance)
+
+    def fit(self, X, y=None):
+        """
+        This is a misuse of the fit function, but X should specify the distance measures
+        to be computed. This will precompute the distance matrices for all of the supplied
+        measures.
+        """
+        for distance_measure in ["euclidean","sts","dtw","ddtw"]:
+            dbs = self._adb.precompute_distances(distance_measure, np.arange(0.1,1.4,0.01))
+            self._adb.save_cluster_result(dbs, distance_measure)
+
+        return self
+   
+    def score(self, X, y=None, dist_measure="euclidean"):
+       # Load up references to the ground truth signals, stored by simulate_and_import
+        nts_per_clust = self.nts_per_clust
+        dbs = self._adb.load_cluster_result(dist_measure)
+        signals_array = []
+        for series_name in self._adb.get_series():
+            for rep_name in self._adb.get_replicates(series_name):
+                signals_array.append(self._adb._h5t["simulations/%s/%s" % (series_name, rep_name)]) 
+        perfect_cluster = 0
+        best_scores = []
+        for i in range(0, self.nclust):
+            found_perfect = False
+            signal_array = [x[i*nts_per_clust,:] for x in signals_array]
+            cluster_lower_bound = i*nts_per_clust
+            cluster_upper_bound = i*nts_per_clust + nts_per_clust
+            true_cluster = [self._adb.feature_index["ts%d".encode() % (i,)] for i in range(cluster_lower_bound,
+                                                                                     cluster_upper_bound)]
+            best = 0
+            for ts in true_cluster:
+                if found_perfect:
+                    break
+                cts = self._adb.get_nearest_timeseries(signal_array, dist_measure)
+                oversize = False
+                for dist in dbs.dist_range:
+                    if oversize:
+                        break
+                    try:
+                        cluster = dbs.DBSCAN(dist, expand_around=cts, max_members=2*nts_per_clust)
+                    except:
+                        oversize = True
+                        break
+                    if set(cluster[1]) == set(true_cluster):
+                        perfect_cluster += 1
+                        found_perfect = True
+                        best = nts_per_clust
+                        break
+                    else:
+                        if len(cluster[1]) < len(true_cluster):
+                            score = nts_per_clust - len(set(true_cluster).difference(set(cluster[1])))
+                            if score > best:
+                                best = score
+            best_scores.append(best)
+        return np.mean(best_scores)/self.nclust
 
 def generate_uniform_schema(ntimepoints, nseries, nreplicates):
     return { "series_" + str(x) : 
